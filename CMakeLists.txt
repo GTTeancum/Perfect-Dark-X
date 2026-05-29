@@ -423,12 +423,14 @@ if(XBOX)
     # Note: this cxbe (NXDK Docker) only supports -OUT, -TITLE, -MODE, -LOGO,
     # -DEBUGPATH.  The -TITLEID and -STACK flags are not recognised; stack size
     # is controlled by nxdk-link's -stack:65536 flag instead.
+    # Use $<TARGET_FILE:pd> (CMake generator expression) for the exact PE path —
+    # CMAKE_EXECUTABLE_SUFFIX may or may not append .exe depending on the system.
     add_custom_command(TARGET pd POST_BUILD
       COMMAND ${CXBE_EXECUTABLE}
         -OUT:${CMAKE_BINARY_DIR}/default.xbe
         -TITLE:"Perfect Dark X"
-        ${CMAKE_BINARY_DIR}/${BIN_NAME}.exe
-      COMMENT "Converting ${BIN_NAME}.exe -> default.xbe"
+        $<TARGET_FILE:pd>
+      COMMENT "Converting pd executable -> default.xbe"
     )
   else()
     message(WARNING "cxbe not found — skipping XBE conversion. "

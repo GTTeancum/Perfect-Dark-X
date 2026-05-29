@@ -150,8 +150,12 @@ jobs:
                 tail -80 /tmp/build.log >&2
                 echo "=== BUILD DIR ===" >&2
                 ls -la build-xbox/ >&2
+                echo "=== LINK output files (find all PE/EXE) ===" >&2
+                find build-xbox/ -name "*.exe" -o -name "pd.*" 2>/dev/null >&2 || true
                 exit 1
               }
+              echo "=== Build dir after success ==="
+              ls -la build-xbox/
               tail -20 /tmp/build.log
               echo "XBE size: $(stat -c%s build-xbox/default.xbe) bytes"
             '
