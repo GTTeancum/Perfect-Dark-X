@@ -43,6 +43,41 @@ extern "C" {
 #include "platform.h"
 #include "system.h"
 
+// ── NV097 indexed-register helpers ──────────────────────────────────────────
+// In NXDK's nv_regs.h, NV097_SET_COMBINER_* and NV097_SET_TEXTURE_* are plain
+// integer constants (base register for stage/tile 0).  Successive stages or
+// texture units are at +4-byte or +0x40-byte strides respectively.
+// We wrap them in our own macros so call-sites can remain readable.
+
+// Register-combiner stage stride: 4 bytes between consecutive stages
+#define NV097_COMBINER_COLOR_ICW(s)  (NV097_SET_COMBINER_COLOR_ICW  + (uint32_t)(s) * 4u)
+#define NV097_COMBINER_COLOR_OCW(s)  (NV097_SET_COMBINER_COLOR_OCW  + (uint32_t)(s) * 4u)
+#define NV097_COMBINER_ALPHA_ICW(s)  (NV097_SET_COMBINER_ALPHA_ICW  + (uint32_t)(s) * 4u)
+#define NV097_COMBINER_ALPHA_OCW(s)  (NV097_SET_COMBINER_ALPHA_OCW  + (uint32_t)(s) * 4u)
+
+// Texture-unit stride: 0x40 bytes between consecutive texture stages
+#define NV097_TEXTURE_OFFSET(t)      (NV097_SET_TEXTURE_OFFSET      + (uint32_t)(t) * 0x40u)
+#define NV097_TEXTURE_FORMAT(t)      (NV097_SET_TEXTURE_FORMAT       + (uint32_t)(t) * 0x40u)
+#define NV097_TEXTURE_ADDRESS(t)     (NV097_SET_TEXTURE_ADDRESS      + (uint32_t)(t) * 0x40u)
+#define NV097_TEXTURE_CONTROL0(t)    (NV097_SET_TEXTURE_CONTROL0     + (uint32_t)(t) * 0x40u)
+#define NV097_TEXTURE_FILTER(t)      (NV097_SET_TEXTURE_FILTER       + (uint32_t)(t) * 0x40u)
+#define NV097_TEXTURE_IMAGE_RECT(t)  (NV097_SET_TEXTURE_IMAGE_RECT   + (uint32_t)(t) * 0x40u)
+
+// Depth-write enable: some NXDK versions call this NV097_SET_DEPTH_MASK
+#ifndef NV097_SET_DEPTH_WRITE_ENABLE
+#  ifdef  NV097_SET_DEPTH_MASK
+#    define NV097_SET_DEPTH_WRITE_ENABLE NV097_SET_DEPTH_MASK
+#  else
+#    define NV097_SET_DEPTH_WRITE_ENABLE 0x00000354u  // NV2A depth-write mask register
+#  endif
+#endif
+
+// Scissor clip registers (may not be defined in older NXDK nv_regs.h)
+#ifndef NV097_SET_SCISSOR_HORIZONTAL
+#  define NV097_SET_SCISSOR_HORIZONTAL 0x000008C0u
+#  define NV097_SET_SCISSOR_VERTICAL   0x000008C4u
+#endif
+
 // ── NV2A push-buffer helpers ─────────────────────────────────────────────────
 // pbkit's pb_push* macros take a uint32_t* and advance it.
 
@@ -266,11 +301,11 @@ static void apply_combiner_state(const CombinerState &cs)
 
     p = pb_begin();
     // Stage 0 colour
-    pb_push1(p, NV097_SET_COMBINER_COLOR_ICW(0), cs.color_icw);
-    pb_push1(p, NV097_SET_COMBINER_COLOR_OCW(0), cs.color_ocw);
+    pb_push1(p, NV097_COMBINER_COLOR_ICW(0), cs.color_icw);
+    pb_push1(p, NV097_COMBINER_COLOR_OCW(0), cs.color_ocw);
     // Stage 0 alpha
-    pb_push1(p, NV097_SET_COMBINER_ALPHA_ICW(0), cs.alpha_icw);
-    pb_push1(p, NV097_SET_COMBINER_ALPHA_OCW(0), cs.alpha_ocw);
+    pb_push1(p, NV097_COMBINER_ALPHA_ICW(0), cs.alpha_icw);
+    pb_push1(p, NV097_COMBINER_ALPHA_OCW(0), cs.alpha_ocw);
     pb_end(p);
 
     // For stages 1-7 disable by setting them to pass-through
@@ -278,10 +313,10 @@ static void apply_combiner_state(const CombinerState &cs)
     static const uint32_t passthru_ocw = NV2A_OCW_DEFAULT;
     for (int s = 1; s < 8; ++s) {
         p = pb_begin();
-        pb_push1(p, NV097_SET_COMBINER_COLOR_ICW(s), passthru_icw);
-        pb_push1(p, NV097_SET_COMBINER_COLOR_OCW(s), passthru_ocw);
-        pb_push1(p, NV097_SET_COMBINER_ALPHA_ICW(s), passthru_icw);
-        pb_push1(p, NV097_SET_COMBINER_ALPHA_OCW(s), passthru_ocw);
+        pb_push1(p, NV097_COMBINER_COLOR_ICW(s), passthru_icw);
+        pb_push1(p, NV097_COMBINER_COLOR_OCW(s), passthru_ocw);
+        pb_push1(p, NV097_COMBINER_ALPHA_ICW(s), passthru_icw);
+        pb_push1(p, NV097_COMBINER_ALPHA_OCW(s), passthru_ocw);
         pb_end(p);
     }
 
@@ -430,7 +465,7 @@ static void nv2a_select_texture(int tile, uint32_t texture_id, bool linear_filte
     if (texture_id == 0 || !g_textures[texture_id].used || !g_textures[texture_id].vram) {
         // Disable texture unit
         uint32_t *p = pb_begin();
-        pb_push1(p, NV097_SET_TEXTURE_CONTROL0(tile), 0);  // disable
+        pb_push1(p, NV097_TEXTURE_CONTROL0(tile), 0);  // disable
         pb_end(p);
         return;
     }
@@ -441,20 +476,20 @@ static void nv2a_select_texture(int tile, uint32_t texture_id, bool linear_filte
     uint32_t *p = pb_begin();
 
     // Texture offset (physical address in VRAM)
-    pb_push1(p, NV097_SET_TEXTURE_OFFSET(tile), (uint32_t)(uintptr_t)t.vram);
+    pb_push1(p, NV097_TEXTURE_OFFSET(tile), (uint32_t)(uintptr_t)t.vram);
 
     // Texture format
-    pb_push1(p, NV097_SET_TEXTURE_FORMAT(tile), t.fmt_word);
+    pb_push1(p, NV097_TEXTURE_FORMAT(tile), t.fmt_word);
 
     // Texture address (clamp S and T)
-    pb_push1(p, NV097_SET_TEXTURE_ADDRESS(tile),
+    pb_push1(p, NV097_TEXTURE_ADDRESS(tile),
         (1 << 0) |  // S: wrap
         (1 << 8));  // T: wrap
 
     // Filter
     uint32_t min_filter = linear_filter ? 0x03 : 0x02; // LINEAR or NEAREST
     uint32_t mag_filter = linear_filter ? 0x02 : 0x01;
-    pb_push1(p, NV097_SET_TEXTURE_FILTER(tile),
+    pb_push1(p, NV097_TEXTURE_FILTER(tile),
         (min_filter << 16) |
         (mag_filter << 24));
 
@@ -462,9 +497,9 @@ static void nv2a_select_texture(int tile, uint32_t texture_id, bool linear_filte
     uint32_t ctrl0 = 0x40000000; // enable
     ctrl0 |= ((t.width  - 1) << 12);
     ctrl0 |= ((t.height - 1) << 0);
-    pb_push1(p, NV097_SET_TEXTURE_CONTROL0(tile), ctrl0);
+    pb_push1(p, NV097_TEXTURE_CONTROL0(tile), ctrl0);
 
-    pb_push1(p, NV097_SET_TEXTURE_IMAGE_RECT(tile),
+    pb_push1(p, NV097_TEXTURE_IMAGE_RECT(tile),
         (t.height << 16) | t.width);
 
     pb_end(p);
@@ -552,9 +587,9 @@ static void nv2a_set_sampler_parameters(int sampler, bool linear_filter,
     uint32_t mag_filter = linear_filter ? 0x02 : 0x01;
 
     uint32_t *p = pb_begin();
-    pb_push1(p, NV097_SET_TEXTURE_ADDRESS(sampler),
+    pb_push1(p, NV097_TEXTURE_ADDRESS(sampler),
         (s_wrap << 0) | (t_wrap << 8));
-    pb_push1(p, NV097_SET_TEXTURE_FILTER(sampler),
+    pb_push1(p, NV097_TEXTURE_FILTER(sampler),
         (min_filter << 16) | (mag_filter << 24));
     pb_end(p);
 }
@@ -799,7 +834,7 @@ static void nv2a_init(void)
     // Disable all texture units initially
     for (int t = 0; t < 4; ++t) {
         p = pb_begin();
-        pb_push1(p, NV097_SET_TEXTURE_CONTROL0(t), 0);
+        pb_push1(p, NV097_TEXTURE_CONTROL0(t), 0);
         pb_end(p);
     }
 

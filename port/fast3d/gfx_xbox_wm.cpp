@@ -26,7 +26,7 @@ extern "C" {
 #include <hal/debug.h>
 #include <pbkit/pbkit.h>
 #include <SDL.h>
-#include "xbox/debug_xbox.h"
+#include "../src/xbox/debug_xbox.h"
 }
 
 #include "gfx_window_manager_api.h"
@@ -67,9 +67,8 @@ static int       g_target_fps  = 60;
 
 static ULONGLONG qpc_now(void)
 {
-    LARGE_INTEGER c;
-    KeQueryPerformanceCounter(&c);
-    return (ULONGLONG)c.QuadPart;
+    // NXDK: KeQueryPerformanceCounter() returns ULONGLONG directly (no pointer arg)
+    return KeQueryPerformanceCounter();
 }
 
 static double qpc_to_sec(ULONGLONG ticks)
@@ -82,9 +81,8 @@ static double qpc_to_sec(ULONGLONG ticks)
 static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
 {
     // Resolve performance frequency
-    LARGE_INTEGER freq;
-    KeQueryPerformanceFrequency(&freq);
-    g_perf_freq = (ULONGLONG)freq.QuadPart;
+    // NXDK: KeQueryPerformanceFrequency() returns ULONGLONG directly (no pointer arg)
+    g_perf_freq = KeQueryPerformanceFrequency();
 
     // Choose video mode.  If the system supports 480p (HDTV pack connected),
     // prefer it; otherwise fall back to 480i.
