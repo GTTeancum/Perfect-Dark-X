@@ -26,21 +26,46 @@ jobs:
             ghcr.io/xboxdev/nxdk:latest \
             -c '
               echo "=== NXDK root ==="
-              ls /usr/src/nxdk/
+              ls "$NXDK_DIR/"
 
               echo ""
-              echo "=== cmake files ==="
-              find /usr/src/nxdk -name "*.cmake" 2>/dev/null | head -20
+              echo "=== bin/ ==="
+              ls "$NXDK_DIR/bin/" 2>/dev/null || echo "(empty or missing)"
+
+              echo ""
+              echo "=== tools/ ==="
+              ls "$NXDK_DIR/tools/" 2>/dev/null || echo "(empty or missing)"
+
+              echo ""
+              echo "=== include/ ==="
+              ls "$NXDK_DIR/include/" 2>/dev/null || echo "(no include dir)"
+              echo "=== share/ first level ==="
+              ls "$NXDK_DIR/share/" 2>/dev/null || echo "(no share dir)"
 
               echo ""
               echo "=== static libs ==="
-              find /usr/src/nxdk -name "*.a" -o -name "*.lib" 2>/dev/null | grep -v "\.clang\|lto" | head -30
+              find "$NXDK_DIR/lib" -maxdepth 2 \( -name "*.a" -o -name "*.lib" \) | sort
+
+              echo ""
+              echo "=== xboxkrnl header location ==="
+              find "$NXDK_DIR" -name "xboxkrnl.h" 2>/dev/null | head -5
+
+              echo ""
+              echo "=== pbkit header location ==="
+              find "$NXDK_DIR" -name "pbkit.h" 2>/dev/null | head -5
+
+              echo ""
+              echo "=== SDL.h location ==="
+              find "$NXDK_DIR" -name "SDL.h" 2>/dev/null | head -5
 
               echo ""
               echo "=== env ==="
-              env | grep -i nxdk || true
-              env | grep -i llvm || true
-              which clang cmake make 2>/dev/null || true
+              env | grep -i "NXDK\|LLVM\|CLANG\|PATH" || true
+
+              echo ""
+              echo "=== tools ==="
+              which clang cmake make cxbe lld ld.lld 2>/dev/null || true
+              clang --version 2>/dev/null | head -2
             '
 
       - name: Build XBE inside NXDK container
