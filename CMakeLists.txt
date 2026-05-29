@@ -241,9 +241,10 @@ list(APPEND LIBS "${SDL2_LIBRARY}")
 if(XBOX)
   # NXDK ships zlib as lib/libzlib.lib; headers live in lib/zlib/
   set(ZLIB_LIBRARY "${NXDK_DIR}/lib/libzlib.lib")
-  # Try the most common locations inside the NXDK tree
+  # zlib.h lives one level deeper: $NXDK_DIR/lib/zlib/zlib/zlib.h
   find_path(NXDK_ZLIB_INCLUDE_DIR zlib.h
     PATHS
+      "${NXDK_DIR}/lib/zlib/zlib"
       "${NXDK_DIR}/lib/zlib"
       "${NXDK_DIR}/include"
       "${NXDK_DIR}/lib/zlib/include"
