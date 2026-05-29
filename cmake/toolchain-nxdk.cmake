@@ -175,6 +175,9 @@ set(NXDK_LINK_FLAGS_LIST
   "-fuse-ld=nxdk-link"
   "--target=${XBOX_TARGET_TRIPLE}"
   "-Wl,/entry:XboxStartup"
+  # Emit an lld-link symbol map next to the .exe (basename.map) so EIP values
+  # from the XEMU monitor can be translated to symbols.  Harmless at runtime.
+  "-Wl,/MAP"
 )
 
 string(JOIN " " NXDK_LINK_FLAGS_STR ${NXDK_LINK_FLAGS_LIST})

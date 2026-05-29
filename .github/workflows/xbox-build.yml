@@ -158,6 +158,30 @@ jobs:
               ls -la build-xbox/
               tail -20 /tmp/build.log
               echo "XBE size: $(stat -c%s build-xbox/default.xbe) bytes"
+
+              # ── Collect debug symbols for XEMU monitor / GDB / addr2line ──
+              # The PE (pre-cxbe) is loaded at base 0x10000 with no relocation,
+              # so a runtime EIP maps directly to a PE virtual address:
+              #   llvm-addr2line -e pd.<arch>.exe 0x<EIP>
+              mkdir -p build-xbox/debug-syms
+              PE="$(find build-xbox -maxdepth 1 -name "pd*.exe" | head -1)"
+              echo "PE = $PE"
+              if [ -n "$PE" ]; then
+                cp "$PE" build-xbox/debug-syms/
+              fi
+              # lld /MAP output (basename.map next to the .exe)
+              find build-xbox -maxdepth 1 -name "*.map" -exec cp {} build-xbox/debug-syms/ \; || true
+              # Numeric symbol dump (covers statically-linked NXDK funcs too)
+              NM="$(command -v llvm-nm || echo "$NXDK_DIR/tools/llvm/bin/llvm-nm")"
+              if [ -n "$PE" ] && [ -x "$(command -v "$NM" 2>/dev/null || true)" ] || command -v "$NM" >/dev/null 2>&1; then
+                "$NM" --numeric-sort --demangle "$PE" > build-xbox/debug-syms/pd.syms.txt 2>/dev/null \
+                  && echo "wrote pd.syms.txt ($(wc -l < build-xbox/debug-syms/pd.syms.txt) symbols)" \
+                  || echo "llvm-nm failed (non-fatal)"
+              else
+                echo "llvm-nm not found at: $NM (non-fatal)"
+              fi
+              echo "=== debug-syms contents ==="
+              ls -la build-xbox/debug-syms/
             '
 
       - name: Upload XBE artifact
@@ -167,6 +191,14 @@ jobs:
           path: build-xbox/default.xbe
           retention-days: 7
           if-no-files-found: error
+
+      - name: Upload debug symbols artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-xbox-debug
+          path: build-xbox/debug-syms/
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Build instructions summary
         if: success()
