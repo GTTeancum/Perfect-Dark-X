@@ -1,7 +1,7 @@
 #ifndef IN_MATH_H
 #define IN_MATH_H
 
-#ifndef PLATFORM_N64
+#if !defined(PLATFORM_N64) && !defined(PLATFORM_XBOX)
 #include_next <math.h>
 #undef M_PI
 #undef M_TAU
