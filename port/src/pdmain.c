@@ -322,7 +322,9 @@ void mainLoop(void)
 	s32 numplayers;
 	u32 stack;
 
+	PD_DBGMARK(200);
 	func0f175f98();
+	PD_DBGMARK(201);
 
 	var8005d9c4 = 0;
 	argGetLevel(&g_StageNum);
@@ -349,9 +351,11 @@ void mainLoop(void)
 	}
 
 	rngSetSeed(osGetCount());
+	PD_DBGMARK(202);
 
 	// Outer loop - this is infinite because ending is never changed
 	while (!ending) {
+		PD_DBGMARK(203);
 		g_MainNumGfxTasks = 0;
 		g_MainGameLogicEnabled = true;
 		g_MainIsEndscreen = false;
@@ -422,17 +426,22 @@ void mainLoop(void)
 
 		var8005d9c4 = 0;
 
+		PD_DBGMARK(210);
 		mempResetPool(MEMPOOL_7);
 		mempResetPool(MEMPOOL_STAGE);
 		filesStop(4);
+		PD_DBGMARK(211);
 
 		if (argFindByPrefix(1, "-ma")) {
 			g_MainMemaHeapSize = strtol(argFindByPrefix(1, "-ma"), NULL, 0) * 1024;
 		}
 
 		memaReset(mempAlloc(g_MainMemaHeapSize, MEMPOOL_STAGE), g_MainMemaHeapSize);
+		PD_DBGMARK(212);
 		langReset(g_StageNum);
+		PD_DBGMARK(213);
 		playermgrReset();
+		PD_DBGMARK(214);
 
 		if (g_StageNum >= STAGE_TITLE) {
 			numplayers = 0;
@@ -462,7 +471,9 @@ void mainLoop(void)
 			g_Vars.antiplayernum = 1;
 		}
 
+		PD_DBGMARK(215);
 		playermgrAllocatePlayers(numplayers);
+		PD_DBGMARK(216);
 
 		if (argFindByPrefix(1, "-mpbots")) {
 			g_Vars.lvmpbotlevel = 1;
@@ -496,21 +507,32 @@ void mainLoop(void)
 			mpReset();
 		}
 
+		PD_DBGMARK(220);
 		gfxReset();
+		PD_DBGMARK(221);
 		joyReset();
 		dhudReset();
+		PD_DBGMARK(222);
 		zbufReset(g_StageNum);
+		PD_DBGMARK(223);
 		lvReset(g_StageNum);
+		PD_DBGMARK(224);
 		viReset(g_StageNum);
+		PD_DBGMARK(225);
 		frametimeCalculate();
 		profileReset();
+		PD_DBGMARK(226);
 
 		while (g_MainChangeToStageNum < 0) {
 			const s32 cycles = osGetCount() - g_Vars.thisframestartt;
 			if (!g_Vars.mininc60 || (cycles >= g_Vars.mininc60 * CYCLES_PER_FRAME - CYCLES_PER_FRAME / 2)) {
+				PD_DBGMARK(230);
 				schedStartFrame(&g_Sched);
+				PD_DBGMARK(231);
 				mainTick();
+				PD_DBGMARK(232);
 				schedEndFrame(&g_Sched);
+				PD_DBGMARK(233);
 			}
 			if (g_TickExtraSleep) {
 				sysSleep(EXTRA_SLEEP_TIME);
@@ -537,20 +559,27 @@ void mainTick(void)
 	s32 i;
 
 	if (g_MainChangeToStageNum < 0) {
+		PD_DBGMARK(300);
 		frametimeCalculate();
 		profileReset();
 		profileSetMarker(PROFILE_MAINTICK_START);
 		joyDebugJoy();
 		schedSetCrashEnable2(false);
+		PD_DBGMARK(301);
 
 		if (g_MainGameLogicEnabled) {
+			PD_DBGMARK(310);
 			gdl = gdlstart = gfxGetMasterDisplayList();
+			PD_DBGMARK(311);
 
 			gDPSetTile(gdl++, G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, 0x0000, G_TX_LOADTILE, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD);
 			gDPSetTile(gdl++, G_IM_FMT_RGBA, G_IM_SIZ_4b, 0, 0x0100, 6, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD);
 
+			PD_DBGMARK(312);
 			lvTick();
+			PD_DBGMARK(313);
 			playermgrShuffle();
+			PD_DBGMARK(314);
 
 			if (g_StageNum < STAGE_TITLE) {
 				for (i = 0; i < PLAYERCOUNT(); i++) {
@@ -567,7 +596,9 @@ void mainTick(void)
 				}
 			}
 
+			PD_DBGMARK(320);
 			gdl = lvRender(gdl);
+			PD_DBGMARK(321);
 
 			if (debugGetProfileMode() >= 2) {
 				gdl = profileRender(gdl);
@@ -575,16 +606,23 @@ void mainTick(void)
 
 			gDPFullSync(gdl++);
 			gSPEndDisplayList(gdl++);
+			PD_DBGMARK(322);
 		}
 
 		if (g_MainGameLogicEnabled) {
+			PD_DBGMARK(330);
 			gfxSwapBuffers();
+			PD_DBGMARK(331);
 			viUpdateMode();
+			PD_DBGMARK(332);
 		}
 
+		PD_DBGMARK(340);
 		rdpCreateTask(gdlstart, gdl, 0, (uintptr_t) &msg);
+		PD_DBGMARK(341);
 		memaPrint();
 		profileSetMarker(PROFILE_MAINTICK_END);
+		PD_DBGMARK(342);
 	}
 }
 
