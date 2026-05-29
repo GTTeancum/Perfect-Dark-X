@@ -63,10 +63,10 @@ jobs:
               cat "$NXDK_DIR/lib/pbkit/pbkit.h" 2>/dev/null | head -200 || echo "(not found)"
 
               echo ""
-              echo "=== nv_regs.h: depth/scissor/combiner/texture defines ==="
+              echo "=== nv_regs.h: depth/scissor/combiner/texture/vertex defines ==="
               find "$NXDK_DIR" -name "nv_regs.h" \
-                -exec grep -n "DEPTH_WRITE\|DEPTH_MASK\|SCISSOR\|WINDOW_CLIP\|COMBINER_COLOR_ICW\|COMBINER_COLOR_OCW\|COMBINER_ALPHA_ICW\|COMBINER_ALPHA_OCW\|SET_TEXTURE_OFFSET\|SET_TEXTURE_FORMAT\|SET_TEXTURE_ADDRESS\|SET_TEXTURE_CONTROL0\|SET_TEXTURE_FILTER\|SET_TEXTURE_IMAGE_RECT" {} \; \
-                2>/dev/null | head -80 || echo "(nv_regs.h not found)"
+                -exec grep -n "DEPTH_WRITE\|DEPTH_MASK\|SCISSOR\|WINDOW_CLIP\|COMBINER_COLOR_ICW\|COMBINER_COLOR_OCW\|COMBINER_ALPHA_ICW\|COMBINER_ALPHA_OCW\|SET_TEXTURE_OFFSET\|SET_TEXTURE_FORMAT\|SET_TEXTURE_ADDRESS\|SET_TEXTURE_CONTROL0\|SET_TEXTURE_FILTER\|SET_TEXTURE_IMAGE_RECT\|DIFFUSE_COLOR\|SPECULAR_COLOR\|VERTEX4F\|TEXCOORD0_2F\|VERTEX_DATA4UB" {} \; \
+                2>/dev/null | grep "^[0-9]*:#   define" | head -60 || echo "(nv_regs.h not found)"
 
               echo ""
               echo "=== nv2a / kelvin header defines (all define lines) ==="

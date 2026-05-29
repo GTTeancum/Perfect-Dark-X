@@ -21,7 +21,6 @@
 
 extern "C" {
 #include <xboxkrnl/xboxkrnl.h>
-#include <hal/xbox.h>
 #include <hal/video.h>
 #include <hal/debug.h>
 #include <pbkit/pbkit.h>
@@ -84,17 +83,12 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     // NXDK: KeQueryPerformanceFrequency() returns ULONGLONG directly (no pointer arg)
     g_perf_freq = KeQueryPerformanceFrequency();
 
-    // Choose video mode.  If the system supports 480p (HDTV pack connected),
-    // prefer it; otherwise fall back to 480i.
-    DWORD video_flags = XGetVideoFlags();
-    if (settings->width >= 1280 && settings->height >= 720 &&
-        (video_flags & XC_VIDEO_FLAGS_HDTV_720p)) {
-        g_current_mode_idx = 3; // 720p
-    } else if (video_flags & XC_VIDEO_FLAGS_HDTV_480p) {
-        g_current_mode_idx = 1; // 480p
-    } else {
-        g_current_mode_idx = 0; // 480i
-    }
+    // NXDK does not expose XGetVideoFlags() from the original XSDK.
+    // Default to 480i for maximum compatibility.
+    // TODO: detect HDTV capability via EEPROM or XVideoQueryAvailableModes()
+    // once we have the port running.
+    (void)settings;
+    g_current_mode_idx = 0; // 480i
 
     const XboxDisplayMode &m = k_modes[g_current_mode_idx];
     sysLogPrintf(LOG_NOTE, "Xbox video mode: %dx%d %s",

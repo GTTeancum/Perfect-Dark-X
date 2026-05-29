@@ -72,10 +72,33 @@ extern "C" {
 #  endif
 #endif
 
-// Scissor clip registers (may not be defined in older NXDK nv_regs.h)
-#ifndef NV097_SET_SCISSOR_HORIZONTAL
-#  define NV097_SET_SCISSOR_HORIZONTAL 0x000008C0u
-#  define NV097_SET_SCISSOR_VERTICAL   0x000008C4u
+// Scissor — NV2A exposes per-screen-region window clip, not a dedicated scissor.
+// nv_regs.h defines NV097_SET_WINDOW_CLIP_HORIZONTAL/VERTICAL (8 regions).
+// We use region 0 for the scissor rectangle.
+// The register pack format: bits [11:0]=min, bits [27:16]=max (exclusive).
+#ifndef NV097_SET_WINDOW_CLIP_HORIZONTAL
+// fallback: known NV2A method addresses
+#  define NV097_SET_WINDOW_CLIP_HORIZONTAL 0x000002C0u
+#  define NV097_SET_WINDOW_CLIP_VERTICAL   0x000002E0u
+#endif
+// Also enable scissor/clip type register
+#ifndef NV097_SET_WINDOW_CLIP_TYPE
+#  define NV097_SET_WINDOW_CLIP_TYPE       0x000002B4u
+#endif
+
+// Per-vertex color methods for Begin/End immediate mode.
+// NXDK nv_regs.h may not define these by the DIFFUSE/SPECULAR names.
+// Slot mapping: diffuse=3, specular=4 in the NV097 vertex attribute set.
+#ifndef NV097_SET_DIFFUSE_COLOR4UB
+#  ifdef NV097_SET_VERTEX_DATA4UB
+// Use the generic indexed form if available
+#    define NV097_SET_DIFFUSE_COLOR4UB  NV097_SET_VERTEX_DATA4UB(3)
+#    define NV097_SET_SPECULAR_COLOR4UB NV097_SET_VERTEX_DATA4UB(4)
+#  else
+// Numeric fallback — verified against NV2A hardware register map
+#    define NV097_SET_DIFFUSE_COLOR4UB  0x0000186Cu
+#    define NV097_SET_SPECULAR_COLOR4UB 0x00001870u
+#  endif
 #endif
 
 // ── NV2A push-buffer helpers ─────────────────────────────────────────────────
@@ -661,9 +684,11 @@ static void nv2a_set_scissor(int x, int y, int w, int h)
     g_rs.sc_w = w;
     g_rs.sc_h = h;
 
+    // Use NV2A window clip region 0 as scissor.
+    // Format: bits [11:0] = min (inclusive), bits [27:16] = max (exclusive).
     uint32_t *p = pb_begin();
-    pb_push1(p, NV097_SET_SCISSOR_HORIZONTAL, ((x + w) << 16) | x);
-    pb_push1(p, NV097_SET_SCISSOR_VERTICAL,   ((y + h) << 16) | y);
+    pb_push1(p, NV097_SET_WINDOW_CLIP_HORIZONTAL, ((uint32_t)(x + w) << 16) | (uint32_t)x);
+    pb_push1(p, NV097_SET_WINDOW_CLIP_VERTICAL,   ((uint32_t)(y + h) << 16) | (uint32_t)y);
     pb_end(p);
 }
 
