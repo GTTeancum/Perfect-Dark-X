@@ -164,17 +164,16 @@ set(CMAKE_CXX_FLAGS_INIT "${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
 # ── Linker flags ──────────────────────────────────────────────────────────────
 #
 # nxdk-cc uses -fuse-ld=nxdk-link internally (confirmed from wrapper script).
-# nxdk-link is the NXDK custom linker driver at ${NXDK_DIR}/bin/nxdk-link;
-# it invokes lld-link with Xbox-aware flags.
+# nxdk-link calls:  lld -flavor link -subsystem:windows -fixed -base:0x00010000
+#                   -stack:65536 -merge:.edata=.edataxb "$@"
 #
-# CRITICAL: Do NOT use -fuse-ld=lld — Alpine's system lld-link doesn't know
-# the "xbox" subsystem.  -fuse-ld=nxdk-link falls through to the right binary.
-# tools/llvm/bin/ is empty in the Docker image; -B would be useless.
+# CRITICAL: Do NOT pass -Wl,/subsystem:xbox — nxdk-link already sets
+# -subsystem:windows and lld's "link" flavor doesn't know "xbox".
+# DO pass /entry:XboxStartup — nxdk-link doesn't set a default entry point.
 
 set(NXDK_LINK_FLAGS_LIST
   "-fuse-ld=nxdk-link"
   "--target=${XBOX_TARGET_TRIPLE}"
-  "-Wl,/subsystem:xbox"
   "-Wl,/entry:XboxStartup"
 )
 
@@ -202,13 +201,13 @@ set(ZLIB_LIBRARY      "${_NXDK_LIB}/libzlib.lib")
 set(GL_LIBRARY        "")   # no external GL — direct pbkit/NV2A
 
 # Full-path library list consumed by CMakeLists.txt target_link_libraries
-# Note: nxdk_usb.lib does NOT exist in the Docker image — omit it.
 set(EXTRA_LIBRARIES
   "${_NXDK_LIB}/libpbkit.lib"
   "${_NXDK_LIB}/libnxdk_hal.lib"
   "${_NXDK_LIB}/libnxdk.lib"
   "${_NXDK_LIB}/libxboxrt.lib"
   "${_NXDK_LIB}/libSDL2.lib"
+  "${_NXDK_LIB}/nxdk_usb.lib"
   "${_NXDK_LIB}/libzlib.lib"
   "${_NXDK_LIB}/libc++.lib"
   "${_NXDK_LIB}/libpdclib.lib"
