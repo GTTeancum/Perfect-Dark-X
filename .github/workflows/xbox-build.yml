@@ -1,0 +1,92 @@
+name: Xbox Build (NXDK)
+
+on:
+  push:
+    branches: [ "port" ]
+  pull_request:
+    branches: [ "port" ]
+  workflow_dispatch:
+
+jobs:
+  build-xbox-xbe:
+    name: "Build XBE (original Xbox via NXDK)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pull NXDK Docker image
+        run: docker pull ghcr.io/xboxdev/nxdk:latest
+
+      - name: Build XBE inside NXDK container
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":"${{ github.workspace }}" \
+            -w "${{ github.workspace }}" \
+            ghcr.io/xboxdev/nxdk:latest \
+            bash -eux -c '
+              # Locate NXDK (the image sets NXDK_DIR or puts NXDK at /nxdk)
+              if [ -z "${NXDK_DIR:-}" ]; then
+                for _d in /nxdk /usr/local/nxdk /opt/nxdk; do
+                  if [ -f "$_d/CMakeLists.txt" ] || [ -f "$_d/lib/pbkit/pbkit.c" ]; then
+                    export NXDK_DIR="$_d"
+                    break
+                  fi
+                done
+              fi
+              if [ -z "${NXDK_DIR:-}" ]; then
+                echo "ERROR: Cannot locate NXDK installation in container" >&2
+                exit 1
+              fi
+              echo "NXDK_DIR=$NXDK_DIR"
+
+              # Build NXDK libs if not already built (belt-and-suspenders for the container)
+              if [ ! -f "$NXDK_DIR/lib/pbkit/libpbkit.a" ]; then
+                echo "Building NXDK libs..."
+                make -C "$NXDK_DIR" -j"$(nproc)"
+              fi
+
+              # Configure and build the XBE
+              cmake \
+                -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-nxdk.cmake \
+                -DNXDK_DIR="$NXDK_DIR" \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -B build-xbox \
+                .
+
+              cmake --build build-xbox --parallel "$(nproc)"
+
+              # Verify the XBE was produced
+              if [ ! -f build-xbox/default.xbe ]; then
+                echo "ERROR: default.xbe not found after build" >&2
+                ls -la build-xbox/ >&2
+                exit 1
+              fi
+              echo "XBE size: $(stat -c%s build-xbox/default.xbe) bytes"
+            '
+
+      - name: Upload XBE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-xbox-xbe
+          path: build-xbox/default.xbe
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Build instructions summary
+        if: success()
+        run: |
+          echo "## Xbox XBE built successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Create a testable ISO" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the \`pd-xbox-xbe\` artifact (contains \`default.xbe\`)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Obtain \`pd.ntsc-final.z64\` (Perfect Dark USA v1.1, 32 MB)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Run the packer:" >> $GITHUB_STEP_SUMMARY
+          echo "   \`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "   python scripts/pack-xiso.py --xbe default.xbe --rom pd.ntsc-final.z64" >> $GITHUB_STEP_SUMMARY
+          echo "   \`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "4. Load \`perfectdarkx.iso\` into XEMU: **Machine → Settings → DVD**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See \`XBOX_PORT_PLAN.md\` for expected output at each phase (0–11)." >> $GITHUB_STEP_SUMMARY
