@@ -59,6 +59,17 @@ jobs:
               find "$NXDK_DIR" -name "SDL.h" 2>/dev/null | head -5
 
               echo ""
+              echo "=== pbkit.h: NV097 combiner/texture/depth defines ==="
+              grep -n "NV097_SET_COMBINER\|NV097_SET_TEXTURE\|NV097_SET_DEPTH\|NV097_SET_SCISSOR\|SDL_MAJOR\|SDL_MINOR\|SDL_PATCHLEVEL" \
+                "$NXDK_DIR/lib/pbkit/pbkit.h" 2>/dev/null | head -80 || \
+              find "$NXDK_DIR" -name "pbkit.h" -exec grep -n "NV097_SET_COMBINER\|NV097_SET_TEXTURE\|NV097_SET_DEPTH\|NV097_SET_SCISSOR" {} \; 2>/dev/null | head -80
+
+              echo ""
+              echo "=== SDL version ==="
+              grep -r "SDL_MAJOR_VERSION\|SDL_MINOR_VERSION\|SDL_PATCHLEVEL" \
+                "$NXDK_DIR/lib/sdl" 2>/dev/null | grep "define" | head -5 || true
+
+              echo ""
               echo "=== env ==="
               env | grep -i "NXDK\|LLVM\|CLANG\|PATH" || true
 

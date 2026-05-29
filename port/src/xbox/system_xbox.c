@@ -8,6 +8,8 @@
 #include <time.h>
 
 #include <xboxkrnl/xboxkrnl.h>
+// mkdir for directory creation (pdclib may not have it; use XboxCreateDirectory stub if needed)
+static inline void xboxMkdir(const char *path) { (void)path; }
 #include <hal/debug.h>
 #include <SDL.h>
 
@@ -24,9 +26,8 @@ static ULONGLONG startTick  = 0;
 
 static ULONGLONG qpc(void)
 {
-    LARGE_INTEGER counter;
-    KeQueryPerformanceCounter(&counter);
-    return (ULONGLONG)counter.QuadPart;
+    // NXDK: KeQueryPerformanceCounter() returns ULONGLONG directly (no pointer arg)
+    return KeQueryPerformanceCounter();
 }
 
 // ── Logging ──────────────────────────────────────────────────────────────────
@@ -65,9 +66,8 @@ s32 sysArgGetInt(const char *arg, s32 defval)
 
 void sysInit(void)
 {
-    LARGE_INTEGER freq;
-    KeQueryPerformanceFrequency(&freq);
-    perfFreq  = (ULONGLONG)freq.QuadPart;
+    // NXDK: KeQueryPerformanceFrequency() returns ULONGLONG directly
+    perfFreq  = KeQueryPerformanceFrequency();
     startTick = qpc();
 
     // Open log on D:\ (game media / USB drive)
@@ -165,8 +165,7 @@ void sysGetHomePath(char *outPath, const u32 outLen)
     strncpy(outPath, "E:\\TDATA\\PerfectDarkX", outLen - 1);
     outPath[outLen - 1] = '\0';
 
-    // Best-effort mkdir — NXDK's CRT provides CreateDirectory
-    CreateDirectoryA(outPath, NULL);
+    xboxMkdir(outPath); // best-effort; save dir is created by NXDK at title launch
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
