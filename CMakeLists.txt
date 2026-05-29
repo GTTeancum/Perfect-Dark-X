@@ -156,6 +156,8 @@ endif()
 
 if(XBOX)
   add_definitions(-DPLATFORM_XBOX=1)
+  # Xbox is Pentium III (SSE1 only, no SSE2); disable SIMD in minimp3
+  add_definitions(-DMINIMP3_NO_SIMD=1)
 endif()
 
 # Compiler flags

@@ -164,6 +164,7 @@ int main(int argc, const char **argv)
 }
 #endif // !PLATFORM_XBOX
 
+#ifndef PLATFORM_XBOX
 PD_CONSTRUCTOR static void gameConfigInit(void)
 {
 	configRegisterInt("Game.MemorySize", &g_OsMemSizeMb, 4, 2048);
@@ -194,3 +195,4 @@ PD_CONSTRUCTOR static void gameConfigInit(void)
 		configRegisterInt(strFmt("Game.Player%d.UseKeyReloads", i), &g_PlayerExtCfg[j].usereloads, 0, false);
 	}
 }
+#endif // !PLATFORM_XBOX

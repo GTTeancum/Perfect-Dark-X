@@ -339,7 +339,7 @@ static inline void inputInitController(const s32 cidx, const s32 jidx)
 #endif
 
 	// make the LEDs on the controller indicate which player it's for
-#if SDL_VERSION_ATLEAST(2, 0, 9)
+#if SDL_VERSION_ATLEAST(2, 0, 9) && !defined(PLATFORM_XBOX)
 	SDL_GameControllerSetPlayerIndex(pads[cidx], cidx);
 #endif
 
@@ -366,7 +366,7 @@ static inline void inputCloseController(const s32 cidx)
 		padsCfg[cidx].deviceIndex, SDL_GameControllerName(pads[cidx]), inputControllerGetId(pads[cidx]), cidx);
 
 	// reset player LEDs
-#if SDL_VERSION_ATLEAST(2, 0, 9)
+#if SDL_VERSION_ATLEAST(2, 0, 9) && !defined(PLATFORM_XBOX)
 	SDL_GameControllerSetPlayerIndex(pads[cidx], -1);
 #endif
 
