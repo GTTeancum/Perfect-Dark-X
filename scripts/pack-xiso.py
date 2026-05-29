@@ -258,7 +258,9 @@ def validate_rom(path: str) -> None:
 _PD_INI = (
     b"[Game]\n"
     b"SkipIntro = 1\n"
-    b"MemorySize = 24\n"
+    # 8 MB game heap: the 32 MB ROM is resident on a 64 MB Xbox, so a larger
+    # heap can't get a contiguous block (matches g_OsMemSizeMb default).
+    b"MemorySize = 8\n"
     b"\n"
     b"[Video]\n"
     b"DefaultFullscreen = 1\n"

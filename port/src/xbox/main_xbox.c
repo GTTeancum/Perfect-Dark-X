@@ -36,7 +36,10 @@
 // ── Globals ───────────────────────────────────────────────────────────────────
 
 u32 g_OsMemSize    = 0;
-s32 g_OsMemSizeMb  = 16;
+// 8 MB = real N64 Expansion Pak size and the right budget on a 64 MB Xbox:
+// the 32 MB ROM stays resident, so a 16 MB game heap can't get a contiguous
+// block.  memp/vminit already branch correctly for sizes > 4 MB.
+s32 g_OsMemSizeMb  = 8;
 u8  g_Is4Mb        = 0;
 s8  g_Resetting    = 0;
 
