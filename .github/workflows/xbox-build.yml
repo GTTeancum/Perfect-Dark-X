@@ -21,33 +21,40 @@ jobs:
 
       - name: Build XBE inside NXDK container
         run: |
+          # The NXDK image is Alpine-based (no bash).  Its entrypoint at
+          # /usr/src/nxdk/docker_entry.sh calls "exec bash $@" which fails.
+          # Bypass it entirely with --entrypoint /bin/sh and source the env
+          # setup manually.
           docker run --rm \
+            --entrypoint /bin/sh \
             -v "${{ github.workspace }}":"${{ github.workspace }}" \
             -w "${{ github.workspace }}" \
             ghcr.io/xboxdev/nxdk:latest \
-            bash -eux -c '
-              # Locate NXDK (the image sets NXDK_DIR or puts NXDK at /nxdk)
+            -eux -c '
+              # Locate NXDK — check paths in order of likelihood
+              for _d in /usr/src/nxdk /nxdk /usr/local/nxdk /opt/nxdk; do
+                if [ -f "$_d/CMakeLists.txt" ] || [ -d "$_d/lib/pbkit" ]; then
+                  NXDK_DIR="$_d"
+                  break
+                fi
+              done
               if [ -z "${NXDK_DIR:-}" ]; then
-                for _d in /nxdk /usr/local/nxdk /opt/nxdk; do
-                  if [ -f "$_d/CMakeLists.txt" ] || [ -f "$_d/lib/pbkit/pbkit.c" ]; then
-                    export NXDK_DIR="$_d"
-                    break
-                  fi
-                done
-              fi
-              if [ -z "${NXDK_DIR:-}" ]; then
-                echo "ERROR: Cannot locate NXDK installation in container" >&2
+                echo "ERROR: Cannot locate NXDK in container — searched /usr/src/nxdk /nxdk /usr/local/nxdk /opt/nxdk" >&2
+                find / -name "pbkit.c" 2>/dev/null | head -5 >&2
                 exit 1
               fi
+              export NXDK_DIR
               echo "NXDK_DIR=$NXDK_DIR"
 
-              # Build NXDK libs if not already built (belt-and-suspenders for the container)
+              # Add NXDK toolchain to PATH
+              export PATH="$NXDK_DIR/tools/llvm/bin:$NXDK_DIR/bin:$PATH"
+
+              # Build NXDK libs if not pre-built in the image
               if [ ! -f "$NXDK_DIR/lib/pbkit/libpbkit.a" ]; then
                 echo "Building NXDK libs..."
                 make -C "$NXDK_DIR" -j"$(nproc)"
               fi
 
-              # Configure and build the XBE
               cmake \
                 -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-nxdk.cmake \
                 -DNXDK_DIR="$NXDK_DIR" \
@@ -57,7 +64,6 @@ jobs:
 
               cmake --build build-xbox --parallel "$(nproc)"
 
-              # Verify the XBE was produced
               if [ ! -f build-xbox/default.xbe ]; then
                 echo "ERROR: default.xbe not found after build" >&2
                 ls -la build-xbox/ >&2
