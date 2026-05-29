@@ -200,11 +200,26 @@ void __cdecl main(void)
     g_OsMemSize    = osGetMemSize();
     g_MempHeapSize = g_OsMemSize;
 
+    // Report the real memory budget: the 32 MB ROM is already resident, so we
+    // need to know how much physical RAM is actually left for the game heap.
+    MM_STATISTICS mm;
+    mm.Length = sizeof(mm);
+    MmQueryStatistics(&mm);
+    const u32 totalMb = (mm.TotalPhysicalPages * 4096u) / (1024u * 1024u);
+    const u32 availMb = (mm.AvailablePages   * 4096u) / (1024u * 1024u);
+    sysLogPrintf(LOG_NOTE, "phys mem: total=%u MB avail=%u MB; rom=%u MB; want heap=%u MB",
+                 totalMb, availMb, g_RomFileSize / (1024u*1024u), g_MempHeapSize / (1024u*1024u));
+    debugPrint("MEM total=%u MB avail=%u MB rom=%u MB heap=%u MB\n",
+               totalMb, availMb, g_RomFileSize / (1024u*1024u), g_MempHeapSize / (1024u*1024u));
+
     BOOT_PRINT("heap alloc...");
     g_MempHeap = sysMemZeroAlloc(g_MempHeapSize);
     if (!g_MempHeap) {
-        sysFatalError("Could not alloc %u bytes for memp heap.\n"
-                      "Xbox has 64 MB; reduce Game.MemorySize in pd.ini.", g_MempHeapSize);
+        sysFatalError("Could not alloc %u MB for memp heap.\n"
+                      "Physical RAM: total %u MB, available %u MB (ROM uses %u MB).\n"
+                      "Reduce Game.MemorySize in pd.ini.",
+                      g_MempHeapSize / (1024u*1024u), totalMb, availMb,
+                      g_RomFileSize / (1024u*1024u));
     }
     BOOT_PRINT("heap OK");
 
