@@ -169,12 +169,15 @@ set(CMAKE_CXX_FLAGS_INIT "${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
 #
 # CRITICAL: Do NOT pass -Wl,/subsystem:xbox — nxdk-link already sets
 # -subsystem:windows and lld's "link" flavor doesn't know "xbox".
-# DO pass /entry:XboxStartup — nxdk-link doesn't set a default entry point.
+# CRITICAL: Do NOT override /entry.  With -subsystem:windows, lld defaults the
+# entry to WinMainCRTStartup, which NXDK's CRT provides: it performs CRT init
+# and runs global constructors (.init_array / PD_CONSTRUCTOR) before calling
+# our main().  Forcing /entry:<ourfunc> skips all of that and faults early in
+# kernel space (observed: HLT with garbage CR2).  We define void main(void).
 
 set(NXDK_LINK_FLAGS_LIST
   "-fuse-ld=nxdk-link"
   "--target=${XBOX_TARGET_TRIPLE}"
-  "-Wl,/entry:XboxStartup"
   # Emit an lld-link symbol map next to the .exe (basename.map) so EIP values
   # from the XEMU monitor can be translated to symbols.  Harmless at runtime.
   "-Wl,/MAP"

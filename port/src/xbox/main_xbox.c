@@ -108,8 +108,11 @@ static void cleanup(void)
 }
 
 // ── Xbox entry point ──────────────────────────────────────────────────────────
-// NXDK expects the user to define XboxStartup() as the PE entry point.
-// nxdk-link passes /entry:XboxStartup to lld; this function IS the XBE entry.
+// NXDK's CRT provides the real PE entry (WinMainCRTStartup): it runs CRT
+// initialisation and global constructors (.init_array / PD_CONSTRUCTOR) and
+// then calls main().  We MUST NOT override /entry — doing so skips CRT init
+// and global ctors, leaving uninitialised state that faults in kernel space.
+// Match the signature nxdk's CRT calls (confirmed against a working nxdk app).
 
 // One-line-at-a-time status helper: clears the screen and prints a fresh
 // single status line so the framebuffer never accumulates.  The serial/UART
@@ -119,7 +122,7 @@ static void cleanup(void)
     debugPrint("PD-X: " msg "\n"); \
 } while(0)
 
-void XboxStartup(void)
+void __cdecl main(void)
 {
     BOOT_PRINT("entry");
 
