@@ -3,6 +3,8 @@
 #include "data.h"
 #include "types.h"
 
+/* NXDK/pdclib provides atan2f — skip N64-specific version */
+#ifndef PLATFORM_XBOX
 f32 atan2f(f32 x, f32 z)
 {
 	f32 result;
@@ -44,3 +46,4 @@ f32 atan2f(f32 x, f32 z)
 
 	return result;
 }
+#endif /* PLATFORM_XBOX */
