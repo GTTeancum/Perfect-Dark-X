@@ -93,10 +93,13 @@ jobs:
                 .
 
               cmake --build build-xbox --parallel "$(nproc)" > /tmp/build.log 2>&1 || {
-                echo "=== BUILD ERRORS ===" >&2
-                grep " error:" /tmp/build.log | head -80 >&2 || true
-                echo "=== LAST 50 LINES ===" >&2
-                tail -50 /tmp/build.log >&2
+                echo "=== BUILD ERRORS (grep) ===" >&2
+                grep -i "error\|failed\|cannot\|lld:\|undefined\|FATAL" /tmp/build.log | head -80 >&2 || true
+                echo "=== FIRST 30 LINES ===" >&2
+                head -30 /tmp/build.log >&2
+                echo "=== LAST 80 LINES ===" >&2
+                tail -80 /tmp/build.log >&2
+                echo "=== BUILD DIR ===" >&2
                 ls -la build-xbox/ >&2
                 exit 1
               }
