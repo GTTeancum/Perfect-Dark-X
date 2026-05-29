@@ -1,8 +1,12 @@
 # NXDK toolchain for Original Xbox
 # Usage: cmake -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-nxdk.cmake ..
 #
-# Requires NXDK to be installed and $NXDK_DIR set (or passed via -DNXDK_DIR=...).
-# NXDK ships Clang/LLVM targeting i686-pc-windows-msvc (Xbox ABI).
+# Requires NXDK to be installed and $NXDK_DIR set (or passed via -DNXDK_DIR=..).
+#
+# The NXDK Docker image (ghcr.io/xboxdev/nxdk) ships compiler wrappers in
+# ${NXDK_DIR}/bin/ (nxdk-cc, nxdk-cxx, nxdk-lib) that configure clang with
+# the correct Xbox target triple, march, and flags automatically.
+# For local builds with a source checkout, we fall back to the bundled LLVM.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -13,17 +17,23 @@ if(NOT DEFINED NXDK_DIR)
     set(NXDK_DIR "$ENV{NXDK_DIR}")
   else()
     message(FATAL_ERROR
-      "NXDK_DIR is not set. "
-      "Set it to the root of your nxdk checkout, e.g.:\n"
-      "  cmake -DNXDK_DIR=/path/to/nxdk -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-nxdk.cmake ..")
+      "NXDK_DIR is not set.\n"
+      "Set it to the root of your NXDK install, e.g.:\n"
+      "  cmake -DNXDK_DIR=/usr/src/nxdk -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-nxdk.cmake ..")
   endif()
 endif()
 
-# Resolve to absolute path
 get_filename_component(NXDK_DIR "${NXDK_DIR}" ABSOLUTE)
 
-if(NOT EXISTS "${NXDK_DIR}/CMakeLists.txt" AND NOT EXISTS "${NXDK_DIR}/lib/pbkit/pbkit.c")
-  message(FATAL_ERROR "NXDK_DIR does not appear to point at a valid NXDK checkout: ${NXDK_DIR}")
+# Accept either a source checkout (has pbkit.c) or a pre-built install (has pbkit.h/libpbkit.lib)
+if(NOT EXISTS "${NXDK_DIR}/lib/pbkit/pbkit.c" AND
+   NOT EXISTS "${NXDK_DIR}/lib/pbkit/pbkit.h" AND
+   NOT EXISTS "${NXDK_DIR}/lib/libpbkit.lib")
+  message(FATAL_ERROR
+    "NXDK_DIR does not look like a valid NXDK install: ${NXDK_DIR}\n"
+    "Expected one of:\n"
+    "  ${NXDK_DIR}/lib/pbkit/pbkit.h   (pre-built Docker image)\n"
+    "  ${NXDK_DIR}/lib/pbkit/pbkit.c   (source checkout)")
 endif()
 
 message(STATUS "NXDK: ${NXDK_DIR}")
@@ -32,14 +42,18 @@ message(STATUS "NXDK: ${NXDK_DIR}")
 
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR i686)
-
-# Tell our CMakeLists.txt which platform we're on
 set(XBOX TRUE)
 
 # ── Compiler ─────────────────────────────────────────────────────────────────
+#
+# Preference order:
+#   1. ${NXDK_DIR}/bin/nxdk-cc  — wrapper script in pre-built Docker image;
+#      handles target triple, march, NXDK defines, include paths automatically
+#   2. ${NXDK_DIR}/tools/llvm/bin/clang  — bundled LLVM in source checkout
+#   3. System clang  — last resort
 
-# NXDK bundles a pre-built LLVM toolchain
-set(NXDK_LLVM "${NXDK_DIR}/tools/llvm/bin")
+set(_NXDK_CC  "")
+set(_NXDK_CXX "")
 
 if(WIN32)
   set(EXE ".exe")
@@ -47,102 +61,146 @@ else()
   set(EXE "")
 endif()
 
-set(CMAKE_C_COMPILER   "${NXDK_LLVM}/clang${EXE}"   CACHE FILEPATH "C compiler")
-set(CMAKE_CXX_COMPILER "${NXDK_LLVM}/clang++${EXE}" CACHE FILEPATH "C++ compiler")
-set(CMAKE_AR           "${NXDK_LLVM}/llvm-ar${EXE}"  CACHE FILEPATH "Archiver")
-set(CMAKE_RANLIB       "${NXDK_LLVM}/llvm-ranlib${EXE}" CACHE FILEPATH "Ranlib")
-set(CMAKE_LINKER       "${NXDK_LLVM}/ld.lld${EXE}"   CACHE FILEPATH "Linker")
+if(EXISTS "${NXDK_DIR}/bin/nxdk-cc")
+  # Pre-built Docker image — use NXDK wrapper scripts
+  set(_NXDK_CC  "${NXDK_DIR}/bin/nxdk-cc")
+  set(_NXDK_CXX "${NXDK_DIR}/bin/nxdk-cxx")
+  set(_NXDK_AR  "${NXDK_DIR}/bin/nxdk-lib")
+  message(STATUS "NXDK compiler: using nxdk-cc/nxdk-cxx wrappers")
+elseif(EXISTS "${NXDK_DIR}/tools/llvm/bin/clang${EXE}")
+  # Source checkout with bundled LLVM
+  set(_NXDK_CC  "${NXDK_DIR}/tools/llvm/bin/clang${EXE}")
+  set(_NXDK_CXX "${NXDK_DIR}/tools/llvm/bin/clang++${EXE}")
+  set(_NXDK_AR  "${NXDK_DIR}/tools/llvm/bin/llvm-ar${EXE}")
+  message(STATUS "NXDK compiler: using bundled LLVM at ${NXDK_DIR}/tools/llvm/bin")
+else()
+  # Fall back to system clang — must support i686-pc-windows-msvc cross target
+  find_program(_NXDK_CC  NAMES clang   REQUIRED)
+  find_program(_NXDK_CXX NAMES clang++ REQUIRED)
+  find_program(_NXDK_AR  NAMES llvm-ar llvm-ar-20 llvm-ar-18)
+  if(NOT _NXDK_AR)
+    set(_NXDK_AR "${_NXDK_CC}")  # clang can act as archiver with --driver-mode=ar
+  endif()
+  message(STATUS "NXDK compiler: using system clang (${_NXDK_CC})")
+endif()
 
-# Target triple for original Xbox (Pentium III, 32-bit Windows-like ABI)
+set(CMAKE_C_COMPILER   "${_NXDK_CC}"  CACHE FILEPATH "C compiler")
+set(CMAKE_CXX_COMPILER "${_NXDK_CXX}" CACHE FILEPATH "C++ compiler")
+set(CMAKE_AR           "${_NXDK_AR}"  CACHE FILEPATH "Archiver")
+
+# ── Target triple (only needed when using raw clang, not nxdk-cc wrapper) ────
+
 set(XBOX_TARGET_TRIPLE "i686-pc-windows-msvc")
 
-set(CMAKE_C_COMPILER_TARGET   "${XBOX_TARGET_TRIPLE}")
-set(CMAKE_CXX_COMPILER_TARGET "${XBOX_TARGET_TRIPLE}")
+if(NOT EXISTS "${NXDK_DIR}/bin/nxdk-cc")
+  # When using raw clang we must set the target explicitly
+  set(CMAKE_C_COMPILER_TARGET   "${XBOX_TARGET_TRIPLE}")
+  set(CMAKE_CXX_COMPILER_TARGET "${XBOX_TARGET_TRIPLE}")
+endif()
 
-# ── Sysroot / include paths ───────────────────────────────────────────────────
+# ── Include paths ─────────────────────────────────────────────────────────────
+#
+# Container (pre-built): headers live under ${NXDK_DIR}/lib/
+# Source checkout:       headers also under ${NXDK_DIR}/lib/ (same layout)
 
-set(NXDK_INC "${NXDK_DIR}/include")
-set(NXDK_LIB "${NXDK_DIR}/lib")
+set(NXDK_INC_XBOXKRNL "${NXDK_DIR}/lib/xboxkrnl")
+set(NXDK_INC_PBKIT    "${NXDK_DIR}/lib/pbkit")
+set(NXDK_INC_SDL2     "${NXDK_DIR}/lib/sdl/SDL2/include")
+set(NXDK_INC_XBOXRT   "${NXDK_DIR}/lib/xboxrt/libc_extensions")
 
-# Add NXDK's CRT and SDK headers
 include_directories(SYSTEM
-  "${NXDK_INC}"
-  "${NXDK_INC}/SDL2"
-  "${NXDK_LIB}/pbkit"
-  "${NXDK_LIB}/xboxrt/libc_extensions"
+  "${NXDK_INC_XBOXKRNL}"
+  "${NXDK_INC_PBKIT}"
+  "${NXDK_INC_SDL2}"
 )
 
-# ── Compiler flags ────────────────────────────────────────────────────────────
+# xboxrt extension headers (may not exist in all installs)
+if(EXISTS "${NXDK_INC_XBOXRT}")
+  include_directories(SYSTEM "${NXDK_INC_XBOXRT}")
+endif()
 
-# Xbox-specific defines injected by NXDK
-set(XBOX_C_FLAGS
+# ── Compiler flags (only applied when using raw clang) ───────────────────────
+#
+# When nxdk-cc is used these are already baked into the wrapper script.
+# We still set them so local-clang builds work, and they are no-ops if the
+# wrapper already sets them (compiler deduplicates duplicate flags).
+
+set(XBOX_C_FLAGS_LIST
   "-D_XBOX=1"
   "-DXBOX=1"
-  "-D_WIN32=1"   # some SDK headers test this
+  "-D_WIN32=1"
   "-march=pentium3"
   "-msse"
   "-mfpmath=sse"
   "-ffreestanding"
-  "--target=${XBOX_TARGET_TRIPLE}"
 )
 
-string(JOIN " " XBOX_C_FLAGS_STR ${XBOX_C_FLAGS})
+if(NOT EXISTS "${NXDK_DIR}/bin/nxdk-cc")
+  list(APPEND XBOX_C_FLAGS_LIST "--target=${XBOX_TARGET_TRIPLE}")
+endif()
 
+string(JOIN " " XBOX_C_FLAGS_STR ${XBOX_C_FLAGS_LIST})
 set(CMAKE_C_FLAGS_INIT   "${XBOX_C_FLAGS_STR}")
 set(CMAKE_CXX_FLAGS_INIT "${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
 
 # ── Linker flags ──────────────────────────────────────────────────────────────
+#
+# nxdk-cc already passes /subsystem:xbox and /entry:XboxStartup when linking,
+# so we do not duplicate them.  We add them explicitly only for the raw-clang path.
 
-# NXDK links against its own CRT and produces a .exe that cxbe converts to .xbe
-set(NXDK_LINK_FLAGS
+set(NXDK_LINK_FLAGS_LIST
   "-fuse-ld=lld"
   "--target=${XBOX_TARGET_TRIPLE}"
   "-Wl,/subsystem:xbox"
-  "-Wl,/entry:XboxStartup"        # NXDK CRT entry point
-  "-L${NXDK_LIB}"
-  "-L${NXDK_LIB}/hal"
-  "-L${NXDK_LIB}/pbkit"
-  "-L${NXDK_LIB}/sdl/build/.libs" # SDL2 for Xbox
-  "-L${NXDK_LIB}/usb"
-  "-L${NXDK_LIB}/xboxrt"
-  "-L${NXDK_LIB}/xboxrt/libc_extensions"
+  "-Wl,/entry:XboxStartup"
 )
 
-string(JOIN " " NXDK_LINK_FLAGS_STR ${NXDK_LINK_FLAGS})
+string(JOIN " " NXDK_LINK_FLAGS_STR ${NXDK_LINK_FLAGS_LIST})
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${NXDK_LINK_FLAGS_STR}")
 
-# Don't try to run test executables on the host — we're cross-compiling
+# Executables produced by lld targeting MSVC have .exe extension
+set(CMAKE_EXECUTABLE_SUFFIX ".exe")
+
+# Don't try to run test executables on the host — we are cross-compiling
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-# ── Library variables used by CMakeLists.txt ──────────────────────────────────
+# ── Library variables ─────────────────────────────────────────────────────────
+#
+# Libs are named lib{name}.lib in the pre-built image.
+# We specify them with full paths to avoid linker ambiguity.
 
-# These mimic the SDL2/GL/extra lib variables the main build expects
-set(SDL2_INCLUDE_DIR  "${NXDK_INC}/SDL2")
-set(SDL2_LIBRARY      "SDL2")   # linked from NXDK's SDL2 build
-set(ZLIB_INCLUDE_DIR  "${NXDK_INC}")
-set(ZLIB_LIBRARY      "z")
-set(GL_LIBRARY        "")       # no external GL — we use pbkit directly
+set(_NXDK_LIB "${NXDK_DIR}/lib")
 
-# Extra libs NXDK always needs
+# SDL2 include exported so CMakeLists.txt can pass it to find_package overrides
+set(SDL2_INCLUDE_DIR  "${NXDK_INC_SDL2}")
+set(SDL2_LIBRARY      "${_NXDK_LIB}/libSDL2.lib")
+set(ZLIB_INCLUDE_DIR  "${NXDK_DIR}/lib/zlib")
+set(ZLIB_LIBRARY      "${_NXDK_LIB}/libzlib.lib")
+set(GL_LIBRARY        "")   # no external GL — direct pbkit/NV2A
+
+# Full-path library list consumed by CMakeLists.txt target_link_libraries
 set(EXTRA_LIBRARIES
-  pbkit
-  hal
-  nxdk
-  nxdk_cxx
-  xboxrt
-  SDL2
-  usb
-  z
+  "${_NXDK_LIB}/libpbkit.lib"
+  "${_NXDK_LIB}/libnxdk_hal.lib"
+  "${_NXDK_LIB}/libnxdk.lib"
+  "${_NXDK_LIB}/libxboxrt.lib"
+  "${_NXDK_LIB}/libSDL2.lib"
+  "${_NXDK_LIB}/nxdk_usb.lib"
+  "${_NXDK_LIB}/libzlib.lib"
+  "${_NXDK_LIB}/libc++.lib"
+  "${_NXDK_LIB}/libpdclib.lib"
+  "${_NXDK_LIB}/libwinapi.lib"
+  "${_NXDK_LIB}/xboxkrnl/libxboxkrnl.lib"
 )
 
 # ── cxbe / xbe tooling ────────────────────────────────────────────────────────
 
 find_program(CXBE_EXECUTABLE cxbe
-  HINTS "${NXDK_DIR}/tools/cxbe"
+  HINTS "${NXDK_DIR}/tools" "${NXDK_DIR}/tools/cxbe" "${NXDK_DIR}/bin"
   DOC "cxbe: converts PE .exe to Xbox .xbe"
 )
 
 find_program(EXTRACT_XISO_EXECUTABLE extract-xiso
-  HINTS "${NXDK_DIR}/tools/extract-xiso/build"
+  HINTS "${NXDK_DIR}/tools/extract-xiso/build" "${NXDK_DIR}/bin"
   DOC "extract-xiso: create XISO images"
 )
