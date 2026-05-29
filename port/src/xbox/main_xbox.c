@@ -1,6 +1,11 @@
-// Xbox entry point — NXDK calls void main(void) instead of int main(int, char**).
-// We replicate the same init sequence as port/src/main.c here, adapted for
-// the Xbox environment (no command-line args, fixed paths, etc.).
+// Xbox entry point with phase-debug instrumentation for XEMU testing.
+//
+// Each major init step calls dbgPhase() which:
+//   - writes to D:\pd.log (always)
+//   - renders to screen via debugPrint (before pbkit) or pb_print (after)
+//   - pauses DBG_PHASE_PAUSE_MS ms so screenshots can capture each step
+//
+// Post a screenshot per phase to report results; check pd.log for details.
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -25,11 +30,12 @@
 #include "mod.h"
 #include "system.h"
 #include "utils.h"
+#include "debug_xbox.h"
 
-// ── Globals (shared with the rest of the game) ───────────────────────────────
+// ── Globals ───────────────────────────────────────────────────────────────────
 
 u32 g_OsMemSize    = 0;
-s32 g_OsMemSizeMb  = 16;  // default game heap: 16 MB
+s32 g_OsMemSizeMb  = 16;
 u8  g_Is4Mb        = 0;
 s8  g_Resetting    = 0;
 
@@ -40,19 +46,19 @@ OSMesg g_MainMesgBuf[32];
 u8  *g_MempHeap     = NULL;
 u32  g_MempHeapSize = 0;
 
-u32 g_VmNumTlbMisses   = 0;
-u32 g_VmNumPageMisses  = 0;
+u32 g_VmNumTlbMisses    = 0;
+u32 g_VmNumPageMisses   = 0;
 u32 g_VmNumPageReplaces = 0;
-u8  g_VmShowStats      = 0;
+u8  g_VmShowStats       = 0;
 
-s32 g_TickRateDiv   = 1;
+s32 g_TickRateDiv    = 1;
 s32 g_TickExtraSleep = 1;
-s32 g_SkipIntro     = 0;
+s32 g_SkipIntro      = 0;
 s32 g_FileAutoSelect = -1;
 
 extern s32 g_StageNum;
 
-// ── N64 scheduler bootstrap ──────────────────────────────────────────────────
+// ── Scheduler bootstrap ───────────────────────────────────────────────────────
 
 s32 bootGetMemSize(void)
 {
@@ -69,11 +75,10 @@ void *bootAllocateStack(s32 threadid, s32 size)
 void bootCreateSched(void)
 {
     osCreateMesgQueue(&g_MainMesgQueue, g_MainMesgBuf, ARRAYCOUNT(g_MainMesgBuf));
-    // Xbox outputs NTSC by default; PAL XBoxes use PAL but we default to NTSC.
     osCreateScheduler(&g_Sched, NULL, OS_VI_NTSC_LAN1, 1);
 }
 
-// ── Game init ────────────────────────────────────────────────────────────────
+// ── Game init ─────────────────────────────────────────────────────────────────
 
 static void gameInit(void)
 {
@@ -102,26 +107,70 @@ static void cleanup(void)
     crashShutdown();
 }
 
-// ── Xbox entry point ─────────────────────────────────────────────────────────
+// ── Xbox entry point ──────────────────────────────────────────────────────────
 
 void main(void)
 {
-    // No command-line args on Xbox
+    // ── Phase 0: entry ────────────────────────────────────────────────────────
+    // debugPrint is safe here — NXDK sets up a basic text framebuffer before
+    // calling main().  This is the very first visible output.
+    debugClearScreen();
+    debugPrint("Perfect Dark X - Xbox Port\n");
+    debugPrint("Phase 0: entry point reached\n");
+    dbgPhase(DBG_PHASE_ENTRY, "Xbox entry point reached");
+    dbgPause(0);
+
     sysInitArgs(0, NULL);
 
-    // Crash handler is a no-op on Xbox but keep the call for consistency
+    // ── Phase 1: crash handler ────────────────────────────────────────────────
     crashInit();
+    dbgPhase(DBG_PHASE_CRASH_INIT, "crashInit OK (stub)");
+    dbgPause(0);
 
+    // ── Phase 2: system (timer, log) ─────────────────────────────────────────
     sysInit();
+    dbgPhase(DBG_PHASE_SYS_INIT, "sysInit OK - timer running");
+    dbgPause(0);
+
+    // ── Phase 3: filesystem ───────────────────────────────────────────────────
     fsInit();
+    dbgPhase(DBG_PHASE_FS_INIT, "fsInit OK - D:\\ accessible");
+    dbgPause(0);
+
+    // ── Phase 4: config ───────────────────────────────────────────────────────
     configInit();
+    dbgPhase(DBG_PHASE_CFG_INIT, "configInit OK");
+    dbgPause(0);
+
+    // ── Phase 5: video (pbkit + NV2A) ─────────────────────────────────────────
+    // After this call, pbkit is up and dbgPhase switches to pb_print output.
+    // If this crashes: check pb_init return in xbox_wm_init.
     videoInit();
+    // dbgNotifyPbkitUp() was called inside xbox_wm_init; from here pb_print works
+    dbgPhase(DBG_PHASE_VIDEO_INIT, "videoInit OK - NV2A online");
+    dbgPause(0);
+
+    // ── Phase 6: input ────────────────────────────────────────────────────────
     inputInit();
+    dbgPhase(DBG_PHASE_INPUT_INIT, "inputInit OK - SDL gamepad ready");
+    dbgPause(0);
+
+    // ── Phase 7: audio ────────────────────────────────────────────────────────
     audioInit();
+    dbgPhase(DBG_PHASE_AUDIO_INIT, "audioInit OK - SDL audio device open");
+    dbgPause(0);
+
+    // ── Phase 8: ROM load ─────────────────────────────────────────────────────
+    // ROM must be at D:\pd.ntsc-final.z64  (32 MB, .z64 big-endian format).
+    // sysFatalError() is called here if the ROM is missing — the screen will
+    // display the error and spin, making it easy to diagnose in XEMU.
     romdataInit();
+    dbgPhase(DBG_PHASE_ROM_LOAD, "romdataInit OK - ROM loaded (32 MB)");
+    dbgPause(0);
 
     g_ValidGbcRomFound = romdataCheckGbcRom();
 
+    // ── Phase 9: game init ────────────────────────────────────────────────────
     gameInit();
 
     if (fsGetModDir()) {
@@ -132,41 +181,51 @@ void main(void)
 
     bootCreateSched();
 
-    g_OsMemSize     = osGetMemSize();
-    g_MempHeapSize  = g_OsMemSize;
-    g_MempHeap      = sysMemZeroAlloc(g_MempHeapSize);
+    g_OsMemSize    = osGetMemSize();
+    g_MempHeapSize = g_OsMemSize;
+    g_MempHeap     = sysMemZeroAlloc(g_MempHeapSize);
 
     if (!g_MempHeap) {
-        sysFatalError("Could not alloc %u bytes for memp heap.", g_MempHeapSize);
+        sysFatalError("Could not alloc %u bytes for memp heap.\n"
+                      "Xbox has 64 MB; reduce Game.MemorySize in pd.ini.", g_MempHeapSize);
     }
 
-    sysLogPrintf(LOG_NOTE, "memp heap at %p - %p", g_MempHeap, g_MempHeap + g_MempHeapSize);
-    sysLogPrintf(LOG_NOTE, "rom  file at %p - %p", g_RomFile, g_RomFile + g_RomFileSize);
+    sysLogPrintf(LOG_NOTE, "memp heap at %p (%u MB)", g_MempHeap, g_MempHeapSize / (1024*1024));
+    sysLogPrintf(LOG_NOTE, "rom  file at %p (%u MB)", g_RomFile,  g_RomFileSize  / (1024*1024));
 
-    // No --no-sound, --boot-stage, --skip-intro, --profile flags on Xbox.
-    // These can be toggled via the in-game options menu instead.
     g_StageNum = STAGE_TITLE;
+
+    dbgPhase(DBG_PHASE_GAME_INIT, "gameInit OK - heap allocated");
+    dbgPause(0);
+
+    // ── Phase 10: scheduler ───────────────────────────────────────────────────
+    dbgPhase(DBG_PHASE_SCHED, "bootCreateSched OK");
+    dbgPause(0);
+
+    // ── Phase 11: mainProc ────────────────────────────────────────────────────
+    dbgPhase(DBG_PHASE_MAIN_PROC, "entering mainProc() - title screen next");
+    dbgPause(2000);  // longer pause before the game takes over
 
     mainProc();
 
-    // mainProc should never return; if it does, reboot.
+    // Should never return
     XReboot();
 }
 
-// ── Config registrations (same as main.c) ────────────────────────────────────
+// ── Config registrations ──────────────────────────────────────────────────────
 
 PD_CONSTRUCTOR static void gameConfigInit(void)
 {
-    configRegisterInt("Game.MemorySize",              &g_OsMemSizeMb,   4,  2048);
-    configRegisterInt("Game.CenterHUD",               &g_HudCenter,     0,  2);
-    configRegisterInt("Game.MenuMouseControl",         &g_MenuMouseControl, 0, 1);
-    configRegisterFloat("Game.ScreenShakeIntensity",  &g_ViShakeIntensityMult, 0.f, 10.f);
-    configRegisterInt("Game.TickRateDivisor",         &g_TickRateDiv,   0,  10);
-    configRegisterInt("Game.ExtraSleep",              &g_TickExtraSleep, 0, 1);
-    configRegisterInt("Game.SkipIntro",               &g_SkipIntro,     0,  1);
-    configRegisterInt("Game.DisableMpDeathMusic",     &g_MusicDisableMpDeath, 0, 1);
-    configRegisterInt("Game.GEMuzzleFlashes",         &g_BgunGeMuzzleFlashes, 0, 1);
-    configRegisterInt("Game.MaxExplosions",           &g_MaxExplosions, 6,  96);
+    configRegisterInt("Game.MemorySize",             &g_OsMemSizeMb,   4,   2048);
+    configRegisterInt("Game.CenterHUD",              &g_HudCenter,     0,   2);
+    configRegisterInt("Game.MenuMouseControl",        &g_MenuMouseControl, 0, 1);
+    configRegisterFloat("Game.ScreenShakeIntensity", &g_ViShakeIntensityMult, 0.f, 10.f);
+    configRegisterInt("Game.TickRateDivisor",        &g_TickRateDiv,   0,   10);
+    configRegisterInt("Game.ExtraSleep",             &g_TickExtraSleep, 0,  1);
+    configRegisterInt("Game.SkipIntro",              &g_SkipIntro,     0,   1);
+    configRegisterInt("Game.DisableMpDeathMusic",    &g_MusicDisableMpDeath, 0, 1);
+    configRegisterInt("Game.GEMuzzleFlashes",        &g_BgunGeMuzzleFlashes, 0, 1);
+    configRegisterInt("Game.MaxExplosions",          &g_MaxExplosions, 6,   96);
     for (s32 j = 0; j < MAX_PLAYERS; ++j) {
         const s32 i = j + 1;
         configRegisterFloat(strFmt("Game.Player%d.FovY", i),              &g_PlayerExtCfg[j].fovy,              5.f,   175.f);

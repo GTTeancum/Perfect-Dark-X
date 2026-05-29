@@ -26,6 +26,7 @@ extern "C" {
 #include <hal/debug.h>
 #include <pbkit/pbkit.h>
 #include <SDL.h>
+#include "xbox/debug_xbox.h"
 }
 
 #include "gfx_window_manager_api.h"
@@ -110,6 +111,10 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     }
 
     pb_show_front_screen();
+
+    // Let the debug overlay know pbkit is running so it can switch
+    // from debugPrint (raw text mode) to pb_print (GPU framebuffer)
+    dbgNotifyPbkitUp();
 
     // Initialise SDL (audio + gamepad only — no video via SDL)
     if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
