@@ -92,13 +92,15 @@ jobs:
                 -B build-xbox \
                 .
 
-              cmake --build build-xbox --parallel "$(nproc)" 2>&1 | tail -60
-
-              if [ ! -f build-xbox/default.xbe ]; then
-                echo "ERROR: default.xbe not found after build" >&2
+              cmake --build build-xbox --parallel "$(nproc)" > /tmp/build.log 2>&1 || {
+                echo "=== BUILD ERRORS ===" >&2
+                grep " error:" /tmp/build.log | head -80 >&2 || true
+                echo "=== LAST 50 LINES ===" >&2
+                tail -50 /tmp/build.log >&2
                 ls -la build-xbox/ >&2
                 exit 1
-              fi
+              }
+              tail -20 /tmp/build.log
               echo "XBE size: $(stat -c%s build-xbox/default.xbe) bytes"
             '
 
