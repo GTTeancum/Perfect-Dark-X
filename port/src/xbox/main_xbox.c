@@ -111,80 +111,69 @@ static void cleanup(void)
 // NXDK expects the user to define XboxStartup() as the PE entry point.
 // nxdk-link passes /entry:XboxStartup to lld; this function IS the XBE entry.
 
+// One-line-at-a-time status helper: clears the screen and prints a fresh
+// single status line so the framebuffer never accumulates.  The serial/UART
+// channel (View->Debug->Serial in XEMU) receives all lines regardless.
+#define BOOT_PRINT(msg) do { \
+    debugClearScreen(); \
+    debugPrint("PD-X: " msg "\n"); \
+} while(0)
+
 void XboxStartup(void)
 {
-    // ── Phase 0: entry ────────────────────────────────────────────────────────
-    // debugPrint is safe here — NXDK sets up a basic text framebuffer before
-    // calling main().  This is the very first visible output.
-    // Each "PD [N]..." / "PD [N] OK" pair brackets a single call so the last
-    // visible line tells us exactly where execution stopped.
-    debugClearScreen();
-    debugPrint("Perfect Dark X - Xbox Port\n");
-    debugPrint("[0] entry\n");
+    BOOT_PRINT("entry");
 
-    debugPrint("[1] sysInitArgs...\n");
+    BOOT_PRINT("sysInitArgs...");
     sysInitArgs(0, NULL);
-    debugPrint("[1] sysInitArgs OK\n");
+    BOOT_PRINT("sysInitArgs OK");
 
-    // ── Phase 1: crash handler ────────────────────────────────────────────────
-    debugPrint("[2] crashInit...\n");
+    BOOT_PRINT("crashInit...");
     crashInit();
-    debugPrint("[2] crashInit OK\n");
+    BOOT_PRINT("crashInit OK");
 
-    // ── Phase 2: system (timer, log) ─────────────────────────────────────────
-    debugPrint("[3] sysInit...\n");
+    BOOT_PRINT("sysInit...");
     sysInit();
-    debugPrint("[3] sysInit OK\n");
+    BOOT_PRINT("sysInit OK");
     dbgPhase(DBG_PHASE_SYS_INIT, "sysInit OK - timer+log running");
 
-    // ── Phase 3: filesystem ───────────────────────────────────────────────────
-    debugPrint("[4] fsInit...\n");
+    BOOT_PRINT("fsInit...");
     fsInit();
-    debugPrint("[4] fsInit OK\n");
+    BOOT_PRINT("fsInit OK");
     dbgPhase(DBG_PHASE_FS_INIT, "fsInit OK - D:\\ accessible");
 
-    // ── Phase 4: config ───────────────────────────────────────────────────────
-    debugPrint("[5] configInit...\n");
+    BOOT_PRINT("configInit...");
     configInit();
-    debugPrint("[5] configInit OK\n");
+    BOOT_PRINT("configInit OK");
     dbgPhase(DBG_PHASE_CFG_INIT, "configInit OK");
 
     // ── Phase 5: video (pbkit + NV2A) ─────────────────────────────────────────
-    // After this call, pbkit is up and dbgPhase switches to pb_print output.
-    // If this crashes: check pb_init return in xbox_wm_init.
-    debugPrint("[6] videoInit...\n");
+    // After this call pbkit is up; dbgPhase switches to pb_print output.
+    BOOT_PRINT("videoInit...");
     videoInit();
-    // dbgNotifyPbkitUp() was called inside xbox_wm_init; from here pb_print works
-    debugPrint("[6] videoInit OK\n");
+    BOOT_PRINT("videoInit OK");
     dbgPhase(DBG_PHASE_VIDEO_INIT, "videoInit OK - NV2A online");
 
-    // ── Phase 6: input ────────────────────────────────────────────────────────
-    debugPrint("[7] inputInit...\n");
+    BOOT_PRINT("inputInit...");
     inputInit();
-    debugPrint("[7] inputInit OK\n");
+    BOOT_PRINT("inputInit OK");
     dbgPhase(DBG_PHASE_INPUT_INIT, "inputInit OK - SDL gamepad ready");
 
-    // ── Phase 7: audio ────────────────────────────────────────────────────────
-    debugPrint("[8] audioInit...\n");
+    BOOT_PRINT("audioInit...");
     audioInit();
-    debugPrint("[8] audioInit OK\n");
+    BOOT_PRINT("audioInit OK");
     dbgPhase(DBG_PHASE_AUDIO_INIT, "audioInit OK - SDL audio device open");
 
     // ── Phase 8: ROM load ─────────────────────────────────────────────────────
-    // ROM must be at D:\pd.ntsc-final.z64  (32 MB, .z64 big-endian format).
-    // sysFatalError() is called here if the ROM is missing — the screen will
-    // display the error and spin, making it easy to diagnose in XEMU.
-    debugPrint("[9] romdataInit...\n");
+    BOOT_PRINT("romdataInit...");
     romdataInit();
-    debugPrint("[9] romdataInit OK\n");
-    dbgPhase(DBG_PHASE_ROM_LOAD, "romdataInit OK - ROM loaded (32 MB)");
+    BOOT_PRINT("romdataInit OK");
+    dbgPhase(DBG_PHASE_ROM_LOAD, "romdataInit OK - ROM loaded");
 
     g_ValidGbcRomFound = romdataCheckGbcRom();
 
-    // ── Phase 9: game init ────────────────────────────────────────────────────
-    debugPrint("[10] gameInit...\n");
+    BOOT_PRINT("gameInit...");
     gameInit();
-    debugPrint("[10] gameInit OK\n");
+    BOOT_PRINT("gameInit OK");
 
     if (fsGetModDir()) {
         modConfigLoad(MOD_CONFIG_FNAME);
@@ -192,21 +181,20 @@ void XboxStartup(void)
 
     atexit(cleanup);
 
-    debugPrint("[11] bootCreateSched...\n");
+    BOOT_PRINT("bootCreateSched...");
     bootCreateSched();
-    debugPrint("[11] bootCreateSched OK\n");
+    BOOT_PRINT("bootCreateSched OK");
 
     g_OsMemSize    = osGetMemSize();
     g_MempHeapSize = g_OsMemSize;
 
-    debugPrint("[12] heap alloc...\n");
-    g_MempHeap     = sysMemZeroAlloc(g_MempHeapSize);
-
+    BOOT_PRINT("heap alloc...");
+    g_MempHeap = sysMemZeroAlloc(g_MempHeapSize);
     if (!g_MempHeap) {
         sysFatalError("Could not alloc %u bytes for memp heap.\n"
                       "Xbox has 64 MB; reduce Game.MemorySize in pd.ini.", g_MempHeapSize);
     }
-    debugPrint("[12] heap OK\n");
+    BOOT_PRINT("heap OK");
 
     sysLogPrintf(LOG_NOTE, "memp heap at %p (%u MB)", g_MempHeap, g_MempHeapSize / (1024*1024));
     sysLogPrintf(LOG_NOTE, "rom  file at %p (%u MB)", g_RomFile,  g_RomFileSize  / (1024*1024));
@@ -216,15 +204,15 @@ void XboxStartup(void)
     dbgPhase(DBG_PHASE_GAME_INIT, "gameInit+heap OK");
     dbgPhase(DBG_PHASE_SCHED, "bootCreateSched OK");
 
-    // ── Phase 11: mainProc ────────────────────────────────────────────────────
-    debugPrint("[13] entering mainProc...\n");
-    dbgPhase(DBG_PHASE_MAIN_PROC, "entering mainProc() - title screen next");
+    BOOT_PRINT("entering mainProc...");
+    dbgPhase(DBG_PHASE_MAIN_PROC, "entering mainProc()");
 
     mainProc();
 
-    // Should never return
     XReboot();
 }
+
+#undef BOOT_PRINT
 
 // ── Config registrations ──────────────────────────────────────────────────────
 
