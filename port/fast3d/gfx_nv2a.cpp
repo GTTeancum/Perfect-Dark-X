@@ -86,19 +86,13 @@ extern "C" {
 #  define NV097_SET_WINDOW_CLIP_TYPE       0x000002B4u
 #endif
 
-// Per-vertex color methods for Begin/End immediate mode.
-// NXDK nv_regs.h may not define these by the DIFFUSE/SPECULAR names.
-// Slot mapping: diffuse=3, specular=4 in the NV097 vertex attribute set.
-#ifndef NV097_SET_DIFFUSE_COLOR4UB
-#  ifdef NV097_SET_VERTEX_DATA4UB
-// Use the generic indexed form if available
-#    define NV097_SET_DIFFUSE_COLOR4UB  NV097_SET_VERTEX_DATA4UB(3)
-#    define NV097_SET_SPECULAR_COLOR4UB NV097_SET_VERTEX_DATA4UB(4)
-#  else
-// Numeric fallback — verified against NV2A hardware register map
-#    define NV097_SET_DIFFUSE_COLOR4UB  0x0000186Cu
-#    define NV097_SET_SPECULAR_COLOR4UB 0x00001870u
-#  endif
+// Per-vertex color: nv_regs.h defines *4F (float) and *4I (int) forms.
+// The 4UB (packed-byte) form doesn't exist in this NXDK version.
+// We use NV097_SET_DIFFUSE_COLOR4F / NV097_SET_SPECULAR_COLOR4F instead.
+// If this NXDK version also lacks those, provide numeric fallbacks.
+#ifndef NV097_SET_DIFFUSE_COLOR4F
+#  define NV097_SET_DIFFUSE_COLOR4F  0x00001550u
+#  define NV097_SET_SPECULAR_COLOR4F 0x00001570u
 #endif
 
 // ── NV2A push-buffer helpers ─────────────────────────────────────────────────
@@ -780,19 +774,7 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         // Skip remaining inputs (prim, env already handled via constants)
         for (int ii = 1; ii < prg.num_inputs; ++ii) off += 4;
 
-        // Fog colour (optional)
-        float fr = 0, fg = 0, fb = 0, fa = 0;
-        if (prg.cs.use_tex[0] || prg.cs.use_tex[1]) { /* fog will be off */ }
         // (CCFeatures.opt_fog would require 4 more floats here — skip for now)
-
-        // Pack diffuse as ARGB
-        uint8_t a8 = (uint8_t)(ca * 255.0f);
-        uint8_t r8 = (uint8_t)(cr * 255.0f);
-        uint8_t g8 = (uint8_t)(cg * 255.0f);
-        uint8_t b8 = (uint8_t)(cb * 255.0f);
-        uint32_t diffuse  = ((uint32_t)a8 << 24) | ((uint32_t)r8 << 16) |
-                            ((uint32_t)g8 <<  8) |  (uint32_t)b8;
-        uint32_t specular = 0;
 
         // Submit one vertex as inline data
         p = pb_begin();
@@ -803,10 +785,10 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         if (prg.used_textures[1]) {
             pb_push2f(p, NV097_SET_TEXCOORD1_2F, s1, t1);
         }
-        // Diffuse colour
-        pb_push1(p, NV097_SET_DIFFUSE_COLOR4UB, diffuse);
-        // Specular (fog)
-        pb_push1(p, NV097_SET_SPECULAR_COLOR4UB, specular);
+        // Diffuse colour as 4 floats (RGBA) — nv_regs.h defines 4F form, not 4UB
+        pb_push4f(p, NV097_SET_DIFFUSE_COLOR4F, cr, cg, cb, ca);
+        // Specular/fog — zero out
+        pb_push4f(p, NV097_SET_SPECULAR_COLOR4F, 0.0f, 0.0f, 0.0f, 0.0f);
         // Position — must be last to trigger vertex emit
         pb_push4f(p, NV097_SET_VERTEX4F, px, py, pz, pw);
         pb_end(p);
