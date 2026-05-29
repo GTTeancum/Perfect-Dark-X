@@ -16,6 +16,7 @@
 #include <xboxkrnl/xboxkrnl.h>
 #include <hal/xbox.h>
 #include <hal/debug.h>
+#include <hal/video.h>
 
 #include "lib/main.h"
 #include "bss.h"
@@ -124,6 +125,11 @@ static void cleanup(void)
 
 void __cdecl main(void)
 {
+    // Initialise a HAL framebuffer up front so debugPrint/BOOT_PRINT and any
+    // early sysFatalError message are actually visible.  pbkit (videoInit)
+    // reinitialises the display later; this is just for boot diagnostics.
+    XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
+
     BOOT_PRINT("entry");
 
     BOOT_PRINT("sysInitArgs...");
