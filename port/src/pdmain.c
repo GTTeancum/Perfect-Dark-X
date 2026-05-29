@@ -57,6 +57,7 @@
 #include "lib/joy.h"
 #include "lib/main.h"
 #include "lib/snd.h"
+#include "platform.h"
 #include "lib/memp.h"
 #include "lib/mema.h"
 #include "lib/model.h"
@@ -275,12 +276,18 @@ void mainInit(void)
 
 void mainProc(void)
 {
+	PD_DBGMARK(100);
 	mainInit();
+	PD_DBGMARK(101);
 	rdpInit();
+	PD_DBGMARK(102);
 	sndInit();
+	PD_DBGMARK(103);
 
 	while (true) {
+		PD_DBGMARK(104);
 		mainLoop();
+		PD_DBGMARK(105);
 	}
 }
 

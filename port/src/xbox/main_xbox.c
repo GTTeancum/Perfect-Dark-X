@@ -35,6 +35,10 @@
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 
+// Post-mortem breadcrumb (see PD_DBGMARK in platform.h).  Read via XEMU monitor
+// using the .map address of _g_DbgMark to find the last point reached.
+volatile unsigned int g_DbgMark = 0;
+
 u32 g_OsMemSize    = 0;
 // 8 MB = real N64 Expansion Pak size and the right budget on a 64 MB Xbox:
 // the 32 MB ROM stays resident, so a 16 MB game heap can't get a contiguous

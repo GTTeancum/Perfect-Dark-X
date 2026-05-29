@@ -94,6 +94,17 @@
 	#define PD_LEPTR(x) PD_LE32(x)
 #endif
 
+// Lightweight post-mortem breadcrumb: writes a marker value into a global that
+// can be read back from the XEMU monitor (via the .map address of g_DbgMark)
+// after a crash/halt.  No I/O, no rendering — safe to call from anywhere,
+// including hot paths and right before suspected-crashing calls.
+#ifdef PLATFORM_XBOX
+	extern volatile unsigned int g_DbgMark;
+	#define PD_DBGMARK(n) (g_DbgMark = (unsigned int)(n))
+#else
+	#define PD_DBGMARK(n) ((void)0)
+#endif
+
 // module constructor function attribute
 #if defined(__GNUC__) || defined(__clang__)
 	#define PD_CONSTRUCTOR __attribute__((constructor))
