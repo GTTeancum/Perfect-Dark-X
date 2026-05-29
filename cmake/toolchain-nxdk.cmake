@@ -62,31 +62,46 @@ else()
 endif()
 
 if(EXISTS "${NXDK_DIR}/bin/nxdk-cc")
-  # Pre-built Docker image — use NXDK wrapper scripts
+  # Pre-built Docker image — use NXDK wrapper scripts for compilation
   set(_NXDK_CC  "${NXDK_DIR}/bin/nxdk-cc")
   set(_NXDK_CXX "${NXDK_DIR}/bin/nxdk-cxx")
-  set(_NXDK_AR  "${NXDK_DIR}/bin/nxdk-lib")
   message(STATUS "NXDK compiler: using nxdk-cc/nxdk-cxx wrappers")
 elseif(EXISTS "${NXDK_DIR}/tools/llvm/bin/clang${EXE}")
   # Source checkout with bundled LLVM
   set(_NXDK_CC  "${NXDK_DIR}/tools/llvm/bin/clang${EXE}")
   set(_NXDK_CXX "${NXDK_DIR}/tools/llvm/bin/clang++${EXE}")
-  set(_NXDK_AR  "${NXDK_DIR}/tools/llvm/bin/llvm-ar${EXE}")
   message(STATUS "NXDK compiler: using bundled LLVM at ${NXDK_DIR}/tools/llvm/bin")
 else()
   # Fall back to system clang — must support i686-pc-windows-msvc cross target
   find_program(_NXDK_CC  NAMES clang   REQUIRED)
   find_program(_NXDK_CXX NAMES clang++ REQUIRED)
-  find_program(_NXDK_AR  NAMES llvm-ar llvm-ar-20 llvm-ar-18)
-  if(NOT _NXDK_AR)
-    set(_NXDK_AR "${_NXDK_CC}")  # clang can act as archiver with --driver-mode=ar
-  endif()
   message(STATUS "NXDK compiler: using system clang (${_NXDK_CC})")
 endif()
 
-set(CMAKE_C_COMPILER   "${_NXDK_CC}"  CACHE FILEPATH "C compiler")
-set(CMAKE_CXX_COMPILER "${_NXDK_CXX}" CACHE FILEPATH "C++ compiler")
-set(CMAKE_AR           "${_NXDK_AR}"  CACHE FILEPATH "Archiver")
+# Archiver: always use llvm-ar (GNU ar-compatible).  nxdk-lib is MSVC-style
+# and does not accept the 'qc' flags CMake generates for ar.
+find_program(_NXDK_AR
+  NAMES llvm-ar-20 llvm-ar-18 llvm-ar
+  HINTS "${NXDK_DIR}/tools/llvm/bin"
+  PATHS /usr/lib/llvm20/bin /usr/lib/llvm18/bin /usr/bin
+)
+if(NOT _NXDK_AR)
+  # Last resort — GNU ar can archive LLVM object files
+  find_program(_NXDK_AR NAMES ar REQUIRED)
+endif()
+
+find_program(_NXDK_RANLIB
+  NAMES llvm-ranlib-20 llvm-ranlib-18 llvm-ranlib ranlib
+  HINTS "${NXDK_DIR}/tools/llvm/bin"
+  PATHS /usr/lib/llvm20/bin /usr/lib/llvm18/bin /usr/bin
+)
+
+set(CMAKE_C_COMPILER   "${_NXDK_CC}"     CACHE FILEPATH "C compiler")
+set(CMAKE_CXX_COMPILER "${_NXDK_CXX}"   CACHE FILEPATH "C++ compiler")
+set(CMAKE_AR           "${_NXDK_AR}"     CACHE FILEPATH "Archiver")
+if(_NXDK_RANLIB)
+  set(CMAKE_RANLIB     "${_NXDK_RANLIB}" CACHE FILEPATH "Ranlib")
+endif()
 
 # ── Target triple (only needed when using raw clang, not nxdk-cc wrapper) ────
 
