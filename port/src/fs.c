@@ -1,10 +1,12 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <limits.h>
 #include <ctype.h>
+#ifndef PLATFORM_XBOX
+#include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#endif
 #include <PR/ultratypes.h>
 #include "config.h"
 #include "system.h"
@@ -25,7 +27,10 @@ static char exeDir[FS_MAXPATH + 1];  // replaces $E
 
 static s32 fsPathIsWritable(const char *path)
 {
-#ifdef PLATFORM_WIN32
+#ifdef PLATFORM_XBOX
+	(void)path;
+	return 1; // D:\ is always writable on Xbox
+#elif defined(PLATFORM_WIN32)
 	// on windows access() on directories will only check if the directory exists, so
 	char tmp[FS_MAXPATH + 1] = { 0 };
 	snprintf(tmp, sizeof(tmp), "%s/.tmp", path);
@@ -96,6 +101,16 @@ const char *fsFullPath(const char *relPath)
 
 s32 fsInit(void)
 {
+#ifdef PLATFORM_XBOX
+	// On Xbox everything lives on D:\ (the game disc)
+	strncpy(exeDir,  "D:",                      FS_MAXPATH);
+	strncpy(homeDir, "D:",                      FS_MAXPATH);
+	strncpy(baseDir, "D:",                      FS_MAXPATH);
+	strncpy(saveDir, "E:\\TDATA\\PerfectDarkX", FS_MAXPATH);
+	sysLogPrintf(LOG_NOTE, "base dir: %s", baseDir);
+	sysLogPrintf(LOG_NOTE, "save dir: %s", saveDir);
+	return 0;
+#else
 	sysGetExecutablePath(exeDir, FS_MAXPATH);
 
 	// if this is set, default to exe path for everything
@@ -180,6 +195,7 @@ s32 fsInit(void)
 	sysLogPrintf(LOG_NOTE, "save dir: %s", saveDir);
 
 	return 0;
+#endif // !PLATFORM_XBOX
 }
 
 const char *fsGetModDir(void)
@@ -261,12 +277,21 @@ void *fsFileLoad(const char *name, u32 *outSize)
 s32 fsFileSize(const char *name)
 {
 	const char *fullName = fsFullPath(name);
+#ifdef PLATFORM_XBOX
+	FILE *f = fopen(fullName, "rb");
+	if (!f) return -1;
+	fseek(f, 0, SEEK_END);
+	const s32 size = ftell(f);
+	fclose(f);
+	return size;
+#else
 	struct stat st;
 	if (stat(fullName, &st) < 0) {
 		return -1;
 	} else {
 		return st.st_size;
 	}
+#endif
 }
 
 FILE *fsFileOpenWrite(const char *name)
@@ -286,7 +311,10 @@ void fsFileFree(FILE *f)
 
 s32 fsCreateDir(const char *path)
 {
-#ifdef PLATFORM_WIN32
+#ifdef PLATFORM_XBOX
+	(void)path;
+	return 0; // no mkdir needed; dirs are on read-only disc
+#elif defined(PLATFORM_WIN32)
 	return _mkdir(fsFullPath(path));
 #else
 	return mkdir(fsFullPath(path), 0777);

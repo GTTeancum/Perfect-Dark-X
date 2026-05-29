@@ -1,5 +1,9 @@
 #include <string.h>
 #include <ctype.h>
+#ifdef PLATFORM_XBOX
+// strcasecmp provided by port/src/xbox/compat_xbox.c
+int strcasecmp(const char *a, const char *b);
+#endif
 #include <SDL.h>
 #include <PR/ultratypes.h>
 #include <PR/os_thread.h>
@@ -325,13 +329,19 @@ static inline void inputInitController(const s32 cidx, const s32 jidx)
 	if (!padsCfg[cidx].rumbleOn) {
 		// at least on Windows some controllers will report no haptics, but rumble will still function
 		// just assume it's supported if the controller is of known type
+#if SDL_VERSION_ATLEAST(2, 0, 12)
 		const SDL_GameControllerType ctype = SDL_GameControllerGetType(pads[cidx]);
 		padsCfg[cidx].rumbleOn = ctype && (ctype != SDL_CONTROLLER_TYPE_VIRTUAL);
+#else
+		padsCfg[cidx].rumbleOn = 1; // assume rumble supported on older SDL2
+#endif
 	}
 #endif
 
 	// make the LEDs on the controller indicate which player it's for
+#if SDL_VERSION_ATLEAST(2, 0, 9)
 	SDL_GameControllerSetPlayerIndex(pads[cidx], cidx);
+#endif
 
 	// remember the joystick index
 	padsCfg[cidx].deviceIndex = jidx;
@@ -356,7 +366,9 @@ static inline void inputCloseController(const s32 cidx)
 		padsCfg[cidx].deviceIndex, SDL_GameControllerName(pads[cidx]), inputControllerGetId(pads[cidx]), cidx);
 
 	// reset player LEDs
+#if SDL_VERSION_ATLEAST(2, 0, 9)
 	SDL_GameControllerSetPlayerIndex(pads[cidx], -1);
+#endif
 
 	SDL_GameControllerClose(pads[cidx]);
 
@@ -711,7 +723,9 @@ s32 inputInit(void)
 #endif
 	}
 	if (useRawInput) {
+#ifdef SDL_HINT_JOYSTICK_RAWINPUT
 		SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
+#endif
 #ifdef SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT
 		SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
 #elif defined(SDL_HINT_JOYSTICK_HIDAPI_CORRELATE_XINPUT)

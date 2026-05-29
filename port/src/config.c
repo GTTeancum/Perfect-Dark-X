@@ -1,6 +1,11 @@
 #include <stdlib.h>
 #include <string.h>
+#ifndef PLATFORM_XBOX
 #include <strings.h>
+#else
+// strncasecmp provided by port/src/xbox/compat_xbox.c
+int strncasecmp(const char *a, const char *b, unsigned int n);
+#endif
 #include <ctype.h>
 #include <PR/ultratypes.h>
 #include "fs.h"
