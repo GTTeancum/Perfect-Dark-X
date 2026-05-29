@@ -5,10 +5,12 @@
 #include_next <math.h>
 #undef M_PI
 #undef M_TAU
-// HACK: for some reason the #include_next above doesn't really do anything, so
+#endif
+
+// fabsf/roundf: declared here for N64/Xbox ffreestanding targets where
+// no system math.h is available; hosted targets get them from math.h above.
 float fabsf(float x);
 float roundf(float x);
-#endif
 
 // @bug?
 #define M_BADPI 3.141092641f
