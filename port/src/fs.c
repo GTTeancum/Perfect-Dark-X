@@ -6,6 +6,11 @@
 #include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#else
+#include <windows.h>      // MAX_PATH
+#include <nxdk/mount.h>   // nxMountDrive / nxIsDriveMounted
+#include <nxdk/path.h>    // nxGetCurrentXbeNtPath
+#include <hal/debug.h>
 #endif
 #include <PR/ultratypes.h>
 #include "config.h"
@@ -57,6 +62,20 @@ s32 fsPathIsCwdRelative(const char *path)
 	return (path[0] == '.' && (path[1] == '.' || path[1] == '/' || path[1] == '\\' || path[1] == '\0'));
 }
 
+#ifdef PLATFORM_XBOX
+// nxdk's file API (CreateFile/fopen) resolves DOS paths with backslash
+// separators only; forward slashes fail to open.  Normalise in place.
+static const char *fsXboxNormalize(char *p)
+{
+	for (char *c = p; *c; ++c) {
+		if (*c == '/') {
+			*c = '\\';
+		}
+	}
+	return p;
+}
+#endif
+
 const char *fsFullPath(const char *relPath)
 {
 	static char pathBuf[FS_MAXPATH + 1];
@@ -77,6 +96,9 @@ const char *fsFullPath(const char *relPath)
 			if (len > 0) {
 				memcpy(pathBuf, expStr, len);
 				strncpy(pathBuf + len, relPath + 2, FS_MAXPATH - len);
+#ifdef PLATFORM_XBOX
+				fsXboxNormalize(pathBuf);
+#endif
 				return pathBuf;
 			}
 		}
@@ -90,19 +112,42 @@ const char *fsFullPath(const char *relPath)
 	// path relative to mod or base dir; this will be a read request, so check where the file actually is
 	if (modDir[0]) {
 		snprintf(pathBuf, FS_MAXPATH, "%s/%s", modDir, relPath);
+#ifdef PLATFORM_XBOX
+		fsXboxNormalize(pathBuf);
+#endif
 		if (fsFileSize(pathBuf) >= 0) {
 			return pathBuf;
 		}
 	}
 	// fall back to basedir
 	snprintf(pathBuf, FS_MAXPATH, "%s/%s", baseDir, relPath);
+#ifdef PLATFORM_XBOX
+	fsXboxNormalize(pathBuf);
+#endif
 	return pathBuf;
 }
 
 s32 fsInit(void)
 {
 #ifdef PLATFORM_XBOX
-	// On Xbox everything lives on D:\ (the game disc)
+	// On Xbox everything lives on D:\ (the game disc).
+	// Mount D: explicitly: libnxdk_automount_d wires this via a .CRT$XIT
+	// section that lld-link can dead-strip, so D: may otherwise be unmounted.
+	if (!nxIsDriveMounted('D')) {
+		char ntPath[MAX_PATH];
+		nxGetCurrentXbeNtPath(ntPath);
+		char *sep = strrchr(ntPath, '\\');
+		if (sep) {
+			*(sep + 1) = '\0'; // keep the XBE's directory (with trailing '\')
+		}
+		sysLogPrintf(LOG_NOTE, "mounting D: -> %s", ntPath);
+		if (!nxMountDrive('D', ntPath)) {
+			sysLogPrintf(LOG_ERROR, "FAILED to mount D: (%s)", ntPath);
+		}
+	} else {
+		sysLogPrintf(LOG_NOTE, "D: already mounted");
+	}
+
 	strncpy(exeDir,  "D:",                      FS_MAXPATH);
 	strncpy(homeDir, "D:",                      FS_MAXPATH);
 	strncpy(baseDir, "D:",                      FS_MAXPATH);
