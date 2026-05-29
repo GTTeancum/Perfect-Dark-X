@@ -30,8 +30,10 @@ void dbgFlushScreen(void);
 // phase.  Set DBG_PHASE_PAUSE_MS=0 in the build to skip all pauses.
 void dbgPause(int ms);
 
+// Set to 0 to disable inter-phase sleeps (avoids KeDelayExecutionThread issues
+// in early-boot XEMU context; pauses can be re-enabled once the game is stable).
 #ifndef DBG_PHASE_PAUSE_MS
-#define DBG_PHASE_PAUSE_MS 1200
+#define DBG_PHASE_PAUSE_MS 0
 #endif
 
 // Called internally by gfx_xbox_wm after pb_init() succeeds.

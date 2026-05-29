@@ -116,64 +116,75 @@ void XboxStartup(void)
     // ── Phase 0: entry ────────────────────────────────────────────────────────
     // debugPrint is safe here — NXDK sets up a basic text framebuffer before
     // calling main().  This is the very first visible output.
+    // Each "PD [N]..." / "PD [N] OK" pair brackets a single call so the last
+    // visible line tells us exactly where execution stopped.
     debugClearScreen();
     debugPrint("Perfect Dark X - Xbox Port\n");
-    debugPrint("Phase 0: entry point reached\n");
-    dbgPhase(DBG_PHASE_ENTRY, "Xbox entry point reached");
-    dbgPause(0);
+    debugPrint("[0] entry\n");
 
+    debugPrint("[1] sysInitArgs...\n");
     sysInitArgs(0, NULL);
+    debugPrint("[1] sysInitArgs OK\n");
 
     // ── Phase 1: crash handler ────────────────────────────────────────────────
+    debugPrint("[2] crashInit...\n");
     crashInit();
-    dbgPhase(DBG_PHASE_CRASH_INIT, "crashInit OK (stub)");
-    dbgPause(0);
+    debugPrint("[2] crashInit OK\n");
 
     // ── Phase 2: system (timer, log) ─────────────────────────────────────────
+    debugPrint("[3] sysInit...\n");
     sysInit();
-    dbgPhase(DBG_PHASE_SYS_INIT, "sysInit OK - timer running");
-    dbgPause(0);
+    debugPrint("[3] sysInit OK\n");
+    dbgPhase(DBG_PHASE_SYS_INIT, "sysInit OK - timer+log running");
 
     // ── Phase 3: filesystem ───────────────────────────────────────────────────
+    debugPrint("[4] fsInit...\n");
     fsInit();
+    debugPrint("[4] fsInit OK\n");
     dbgPhase(DBG_PHASE_FS_INIT, "fsInit OK - D:\\ accessible");
-    dbgPause(0);
 
     // ── Phase 4: config ───────────────────────────────────────────────────────
+    debugPrint("[5] configInit...\n");
     configInit();
+    debugPrint("[5] configInit OK\n");
     dbgPhase(DBG_PHASE_CFG_INIT, "configInit OK");
-    dbgPause(0);
 
     // ── Phase 5: video (pbkit + NV2A) ─────────────────────────────────────────
     // After this call, pbkit is up and dbgPhase switches to pb_print output.
     // If this crashes: check pb_init return in xbox_wm_init.
+    debugPrint("[6] videoInit...\n");
     videoInit();
     // dbgNotifyPbkitUp() was called inside xbox_wm_init; from here pb_print works
+    debugPrint("[6] videoInit OK\n");
     dbgPhase(DBG_PHASE_VIDEO_INIT, "videoInit OK - NV2A online");
-    dbgPause(0);
 
     // ── Phase 6: input ────────────────────────────────────────────────────────
+    debugPrint("[7] inputInit...\n");
     inputInit();
+    debugPrint("[7] inputInit OK\n");
     dbgPhase(DBG_PHASE_INPUT_INIT, "inputInit OK - SDL gamepad ready");
-    dbgPause(0);
 
     // ── Phase 7: audio ────────────────────────────────────────────────────────
+    debugPrint("[8] audioInit...\n");
     audioInit();
+    debugPrint("[8] audioInit OK\n");
     dbgPhase(DBG_PHASE_AUDIO_INIT, "audioInit OK - SDL audio device open");
-    dbgPause(0);
 
     // ── Phase 8: ROM load ─────────────────────────────────────────────────────
     // ROM must be at D:\pd.ntsc-final.z64  (32 MB, .z64 big-endian format).
     // sysFatalError() is called here if the ROM is missing — the screen will
     // display the error and spin, making it easy to diagnose in XEMU.
+    debugPrint("[9] romdataInit...\n");
     romdataInit();
+    debugPrint("[9] romdataInit OK\n");
     dbgPhase(DBG_PHASE_ROM_LOAD, "romdataInit OK - ROM loaded (32 MB)");
-    dbgPause(0);
 
     g_ValidGbcRomFound = romdataCheckGbcRom();
 
     // ── Phase 9: game init ────────────────────────────────────────────────────
+    debugPrint("[10] gameInit...\n");
     gameInit();
+    debugPrint("[10] gameInit OK\n");
 
     if (fsGetModDir()) {
         modConfigLoad(MOD_CONFIG_FNAME);
@@ -181,32 +192,33 @@ void XboxStartup(void)
 
     atexit(cleanup);
 
+    debugPrint("[11] bootCreateSched...\n");
     bootCreateSched();
+    debugPrint("[11] bootCreateSched OK\n");
 
     g_OsMemSize    = osGetMemSize();
     g_MempHeapSize = g_OsMemSize;
+
+    debugPrint("[12] heap alloc...\n");
     g_MempHeap     = sysMemZeroAlloc(g_MempHeapSize);
 
     if (!g_MempHeap) {
         sysFatalError("Could not alloc %u bytes for memp heap.\n"
                       "Xbox has 64 MB; reduce Game.MemorySize in pd.ini.", g_MempHeapSize);
     }
+    debugPrint("[12] heap OK\n");
 
     sysLogPrintf(LOG_NOTE, "memp heap at %p (%u MB)", g_MempHeap, g_MempHeapSize / (1024*1024));
     sysLogPrintf(LOG_NOTE, "rom  file at %p (%u MB)", g_RomFile,  g_RomFileSize  / (1024*1024));
 
     g_StageNum = STAGE_TITLE;
 
-    dbgPhase(DBG_PHASE_GAME_INIT, "gameInit OK - heap allocated");
-    dbgPause(0);
-
-    // ── Phase 10: scheduler ───────────────────────────────────────────────────
+    dbgPhase(DBG_PHASE_GAME_INIT, "gameInit+heap OK");
     dbgPhase(DBG_PHASE_SCHED, "bootCreateSched OK");
-    dbgPause(0);
 
     // ── Phase 11: mainProc ────────────────────────────────────────────────────
+    debugPrint("[13] entering mainProc...\n");
     dbgPhase(DBG_PHASE_MAIN_PROC, "entering mainProc() - title screen next");
-    dbgPause(2000);  // longer pause before the game takes over
 
     mainProc();
 
