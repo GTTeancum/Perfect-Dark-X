@@ -223,15 +223,22 @@ static inline void romdataLoadRom(void)
 		romdataWrongRomError("Data segment too small (%u), need at least %u.", dataSegLen, ROMDATA_FILES_OFS);
 	}
 
-	u8 *dataSeg = sysMemAlloc(dataSegLen);
+	// Zero the buffer so that a short inflate leaves deterministic zeros (which
+	// terminate the file offset-table parse cleanly) rather than heap garbage.
+	u8 *dataSeg = sysMemZeroAlloc(dataSegLen);
 	if (!dataSeg) {
 		sysFatalError("Could not allocate %u bytes for data segment.", dataSegLen);
 	}
 
 	u8 scratch[5 * 1024];
-	if (rzipInflate(zipped, dataSeg, scratch) < 0) {
+	// rzipInflate returns the number of bytes produced (0 on failure); it never
+	// returns negative, so a "< 0" test would never fire.  Require the full
+	// uncompressed length, otherwise the data segment (and the file offset
+	// table within it) is corrupt.
+	const s32 inflated = rzipInflate(zipped, dataSeg, scratch);
+	if (inflated < (s32)dataSegLen) {
 		free(dataSeg);
-		sysFatalError("Could not inflate data segment.");
+		sysFatalError("Could not inflate data segment (got %d of %u bytes).", inflated, dataSegLen);
 	}
 
 	romDataSeg = dataSeg;
