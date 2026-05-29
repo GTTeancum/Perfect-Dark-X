@@ -59,10 +59,22 @@ jobs:
               find "$NXDK_DIR" -name "SDL.h" 2>/dev/null | head -5
 
               echo ""
-              echo "=== pbkit.h: NV097 combiner/texture/depth defines ==="
-              grep -n "NV097_SET_COMBINER\|NV097_SET_TEXTURE\|NV097_SET_DEPTH\|NV097_SET_SCISSOR\|SDL_MAJOR\|SDL_MINOR\|SDL_PATCHLEVEL" \
-                "$NXDK_DIR/lib/pbkit/pbkit.h" 2>/dev/null | head -80 || \
-              find "$NXDK_DIR" -name "pbkit.h" -exec grep -n "NV097_SET_COMBINER\|NV097_SET_TEXTURE\|NV097_SET_DEPTH\|NV097_SET_SCISSOR" {} \; 2>/dev/null | head -80
+              echo "=== pbkit.h full content ==="
+              cat "$NXDK_DIR/lib/pbkit/pbkit.h" 2>/dev/null | head -200 || echo "(not found)"
+
+              echo ""
+              echo "=== nv2a / kelvin header defines (all define lines) ==="
+              find "$NXDK_DIR" \( -name "nv2a*.h" -o -name "kelvin*.h" -o -name "nv20*.h" \) \
+                -exec grep -n "define\|include" {} \; 2>/dev/null | head -100 || true
+
+              echo ""
+              echo "=== pbkit header directory ==="
+              ls "$NXDK_DIR/lib/pbkit/" 2>/dev/null
+
+              echo ""
+              echo "=== SDL_GameControllerSetPlayerIndex in SDL2 ==="
+              grep -rn "SDL_GameControllerSetPlayerIndex\|GameControllerSetPlayerIndex" \
+                "$NXDK_DIR/lib/sdl" 2>/dev/null | head -5 || echo "(not found)"
 
               echo ""
               echo "=== SDL version ==="
