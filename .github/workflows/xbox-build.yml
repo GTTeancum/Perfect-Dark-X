@@ -111,6 +111,10 @@ jobs:
               echo ""
               echo "=== nxdk-cxx wrapper script ==="
               cat "$NXDK_DIR/bin/nxdk-cxx" 2>/dev/null || echo "(not found)"
+
+              echo ""
+              echo "=== nxdk-link wrapper script ==="
+              cat "$NXDK_DIR/bin/nxdk-link" 2>/dev/null || echo "(not found)"
             '
 
       - name: Build XBE inside NXDK container

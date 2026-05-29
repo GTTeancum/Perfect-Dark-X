@@ -104,8 +104,11 @@ if(_NXDK_RANLIB)
 endif()
 
 # ── Target triple (only needed when using raw clang, not nxdk-cc wrapper) ────
+#
+# nxdk-cc uses i386-pc-win32 (confirmed from wrapper script); use the same
+# triple so our explicit --target flags match what the compiler already outputs.
 
-set(XBOX_TARGET_TRIPLE "i686-pc-windows-msvc")
+set(XBOX_TARGET_TRIPLE "i386-pc-win32")
 
 if(NOT EXISTS "${NXDK_DIR}/bin/nxdk-cc")
   # When using raw clang we must set the target explicitly
@@ -160,17 +163,17 @@ set(CMAKE_CXX_FLAGS_INIT "${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
 
 # ── Linker flags ──────────────────────────────────────────────────────────────
 #
-# lld-link: error: unknown subsystem: xbox  — Alpine's system lld-link doesn't
-# support the Xbox subsystem.  NXDK ships a patched lld-link in tools/llvm/bin/.
-# Use -B<dir> to tell clang to search there first for helper tools (lld-link).
+# nxdk-cc uses -fuse-ld=nxdk-link internally (confirmed from wrapper script).
+# nxdk-link is the NXDK custom linker driver at ${NXDK_DIR}/bin/nxdk-link;
+# it invokes lld-link with Xbox-aware flags.
 #
-# /subsystem:xbox and /entry:XboxStartup are required for lld-link to produce
-# a valid Xbox PE; nxdk-cc may also set them, duplicates are harmless.
+# CRITICAL: Do NOT use -fuse-ld=lld — Alpine's system lld-link doesn't know
+# the "xbox" subsystem.  -fuse-ld=nxdk-link falls through to the right binary.
+# tools/llvm/bin/ is empty in the Docker image; -B would be useless.
 
 set(NXDK_LINK_FLAGS_LIST
-  "-fuse-ld=lld"
+  "-fuse-ld=nxdk-link"
   "--target=${XBOX_TARGET_TRIPLE}"
-  "-B${NXDK_DIR}/tools/llvm/bin"
   "-Wl,/subsystem:xbox"
   "-Wl,/entry:XboxStartup"
 )
@@ -199,13 +202,13 @@ set(ZLIB_LIBRARY      "${_NXDK_LIB}/libzlib.lib")
 set(GL_LIBRARY        "")   # no external GL — direct pbkit/NV2A
 
 # Full-path library list consumed by CMakeLists.txt target_link_libraries
+# Note: nxdk_usb.lib does NOT exist in the Docker image — omit it.
 set(EXTRA_LIBRARIES
   "${_NXDK_LIB}/libpbkit.lib"
   "${_NXDK_LIB}/libnxdk_hal.lib"
   "${_NXDK_LIB}/libnxdk.lib"
   "${_NXDK_LIB}/libxboxrt.lib"
   "${_NXDK_LIB}/libSDL2.lib"
-  "${_NXDK_LIB}/nxdk_usb.lib"
   "${_NXDK_LIB}/libzlib.lib"
   "${_NXDK_LIB}/libc++.lib"
   "${_NXDK_LIB}/libpdclib.lib"
