@@ -19,3 +19,25 @@ void crashShutdown(void)
 {
     // No-op
 }
+
+void crashCreateThread(void)
+{
+    // No-op: no crash thread on Xbox.
+}
+
+void crashSetMessage(char *string)
+{
+    (void)string;
+    // No-op.
+}
+
+void crashReset(void)
+{
+    // No-op.
+}
+
+void crashAppendChar(char c)
+{
+    (void)c;
+    // No-op.
+}

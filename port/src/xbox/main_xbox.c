@@ -108,8 +108,10 @@ static void cleanup(void)
 }
 
 // ── Xbox entry point ──────────────────────────────────────────────────────────
+// NXDK expects the user to define XboxStartup() as the PE entry point.
+// nxdk-link passes /entry:XboxStartup to lld; this function IS the XBE entry.
 
-void main(void)
+void XboxStartup(void)
 {
     // ── Phase 0: entry ────────────────────────────────────────────────────────
     // debugPrint is safe here — NXDK sets up a basic text framebuffer before
