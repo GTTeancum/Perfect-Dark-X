@@ -160,12 +160,17 @@ set(CMAKE_CXX_FLAGS_INIT "${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
 
 # ── Linker flags ──────────────────────────────────────────────────────────────
 #
-# nxdk-cc already passes /subsystem:xbox and /entry:XboxStartup when linking,
-# so we do not duplicate them.  We add them explicitly only for the raw-clang path.
+# lld-link: error: unknown subsystem: xbox  — Alpine's system lld-link doesn't
+# support the Xbox subsystem.  NXDK ships a patched lld-link in tools/llvm/bin/.
+# Use -B<dir> to tell clang to search there first for helper tools (lld-link).
+#
+# /subsystem:xbox and /entry:XboxStartup are required for lld-link to produce
+# a valid Xbox PE; nxdk-cc may also set them, duplicates are harmless.
 
 set(NXDK_LINK_FLAGS_LIST
   "-fuse-ld=lld"
   "--target=${XBOX_TARGET_TRIPLE}"
+  "-B${NXDK_DIR}/tools/llvm/bin"
   "-Wl,/subsystem:xbox"
   "-Wl,/entry:XboxStartup"
 )

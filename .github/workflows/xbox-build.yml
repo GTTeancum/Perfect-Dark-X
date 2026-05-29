@@ -97,8 +97,20 @@ jobs:
 
               echo ""
               echo "=== tools ==="
-              which clang cmake make cxbe lld ld.lld 2>/dev/null || true
+              which clang cmake make cxbe lld ld.lld lld-link 2>/dev/null || true
               clang --version 2>/dev/null | head -2
+
+              echo ""
+              echo "=== tools/llvm/bin contents ==="
+              ls "$NXDK_DIR/tools/llvm/bin/" 2>/dev/null || echo "(empty or missing)"
+
+              echo ""
+              echo "=== nxdk-cc wrapper script ==="
+              cat "$NXDK_DIR/bin/nxdk-cc" 2>/dev/null || echo "(not found)"
+
+              echo ""
+              echo "=== nxdk-cxx wrapper script ==="
+              cat "$NXDK_DIR/bin/nxdk-cxx" 2>/dev/null || echo "(not found)"
             '
 
       - name: Build XBE inside NXDK container
