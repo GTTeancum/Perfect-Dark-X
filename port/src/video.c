@@ -10,12 +10,25 @@
 #include "video.h"
 
 #include "../fast3d/gfx_api.h"
+
+#ifdef PLATFORM_XBOX
+#include "../fast3d/gfx_xbox_wm.h"
+#include "../fast3d/gfx_nv2a.h"
+#else
 #include "../fast3d/gfx_sdl.h"
 #include "../fast3d/gfx_opengl.h"
+#endif
 
 #ifdef PLATFORM_NSWITCH
 #define DEFAULT_VID_WIDTH 1280
 #define DEFAULT_VID_HEIGHT 720
+#define DEFAULT_VID_FULLSCREEN true
+#define DEFAULT_VID_FULLSCREEN_EXCLUSIVE true
+#elif defined(PLATFORM_XBOX)
+// Xbox video mode is negotiated at init time; start with 640x480 and let
+// the window manager pick the best supported mode.
+#define DEFAULT_VID_WIDTH 640
+#define DEFAULT_VID_HEIGHT 480
 #define DEFAULT_VID_FULLSCREEN true
 #define DEFAULT_VID_FULLSCREEN_EXCLUSIVE true
 #else
@@ -71,8 +84,13 @@ void optionsMenuInit();
 
 s32 videoInit(void)
 {
+#ifdef PLATFORM_XBOX
+	wmAPI = &gfx_xbox_wm;
+	renderingAPI = &gfx_nv2a_api;
+#else
 	wmAPI = &gfx_sdl;
 	renderingAPI = &gfx_opengl_api;
+#endif
 
 	gfx_current_native_viewport.width = 320;
 	gfx_current_native_viewport.height = 220;

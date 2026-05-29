@@ -18,6 +18,7 @@
 #include "system.h"
 #include "utils.h"
 
+#ifndef PLATFORM_XBOX
 u32 g_OsMemSize = 0;
 s32 g_OsMemSizeMb = 16;
 u8 g_Is4Mb = 0;
@@ -41,9 +42,11 @@ s32 g_TickExtraSleep = true;
 s32 g_SkipIntro = false;
 
 s32 g_FileAutoSelect = -1;
+#endif // !PLATFORM_XBOX
 
 extern s32 g_StageNum;
 
+#ifndef PLATFORM_XBOX
 s32 bootGetMemSize(void)
 {
 	return (s32)g_OsMemSize;
@@ -92,7 +95,9 @@ static void cleanup(void)
 	crashShutdown();
 	// TODO: actually shut down all subsystems
 }
+#endif // !PLATFORM_XBOX
 
+#ifndef PLATFORM_XBOX
 int main(int argc, const char **argv)
 {
 	sysInitArgs(argc, argv);
@@ -157,6 +162,7 @@ int main(int argc, const char **argv)
 
 	return 0;
 }
+#endif // !PLATFORM_XBOX
 
 PD_CONSTRUCTOR static void gameConfigInit(void)
 {

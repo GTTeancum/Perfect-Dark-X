@@ -2,7 +2,10 @@
 #define _IN_PLATFORM_H
 
 // detect OS
-#if defined(_WIN32)
+#if defined(_XBOX)
+	// Original Xbox via NXDK — must come before _WIN32 since NXDK may define both
+	#define PLATFORM_XBOX 1
+#elif defined(_WIN32)
 	#define PLATFORM_WIN32 1
 #elif defined(__SWITCH__)
 	#define PLATFORM_POSIX 1
@@ -42,8 +45,11 @@
 	#else
 		#define PLATFORM_LITTLE_ENDIAN 1
 	#endif
-#elif __BIG_ENDIAN__
+#elif defined(__BIG_ENDIAN__)
 	#define PLATFORM_BIG_ENDIAN 1
+#elif defined(PLATFORM_XBOX) || defined(_WIN32) || defined(__i386__) || defined(__x86_64__) || defined(__arm__)
+	// All known Xbox/x86/ARM targets are little-endian
+	#define PLATFORM_LITTLE_ENDIAN 1
 #else
 	#error "Could not determine endianness."
 #endif
@@ -54,6 +60,11 @@
 	#define PD_BSWAP16(x) __builtin_bswap16(x)
 	#define PD_BSWAP32(x) __builtin_bswap32(x)
 	#define PD_BSWAP64(x) __builtin_bswap64(x)
+#elif defined(_MSC_VER)
+	#include <stdlib.h>
+	#define PD_BSWAP16(x) _byteswap_ushort(x)
+	#define PD_BSWAP32(x) _byteswap_ulong(x)
+	#define PD_BSWAP64(x) _byteswap_uint64(x)
 #else
 	#error "Implement PD_BSWAP macros for your compiler."
 #endif

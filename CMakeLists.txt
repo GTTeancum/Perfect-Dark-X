@@ -58,7 +58,10 @@ message(STATUS "Target arch: ${TARGET_ARCH}")
 
 # Determine target OS and platform identifier ($arch-$os)
 
-if(WIN32)
+if(XBOX)
+  # Original Xbox via NXDK
+  set(TARGET_OS "xbox")
+elseif(WIN32)
   # Windows
   set(TARGET_OS "windows")
 elseif(APPLE)
@@ -151,6 +154,10 @@ if(TARGET_IS_64BIT)
   add_definitions(-DPLATFORM_64BIT=1)
 endif()
 
+if(XBOX)
+  add_definitions(-DPLATFORM_XBOX=1)
+endif()
+
 # Compiler flags
 
 # Include directories
@@ -211,41 +218,54 @@ endif()
 set(LIBS )
 
 # SDL2
-find_package(SDL2 REQUIRED)
-if(NINTENDO_SWITCH)
-  if(NOT SDL2_LIBRARY OR NOT SDL2_INCLUDE_DIR)
-    # sometimes FindSDL2 just wants us to suffer and does not set these
-    set(SDL2_LIBRARY "SDL2")
-    set(SDL2_INCLUDE_DIR "${DEVKITPRO}/portlibs/switch/include/SDL2")
+if(XBOX)
+  # SDL2_INCLUDE_DIR / SDL2_LIBRARY already set by toolchain-nxdk.cmake
+  if(NOT SDL2_INCLUDE_DIR)
+    message(FATAL_ERROR "SDL2_INCLUDE_DIR not set by NXDK toolchain")
+  endif()
+else()
+  find_package(SDL2 REQUIRED)
+  if(NINTENDO_SWITCH)
+    if(NOT SDL2_LIBRARY OR NOT SDL2_INCLUDE_DIR)
+      set(SDL2_LIBRARY "SDL2")
+      set(SDL2_INCLUDE_DIR "${DEVKITPRO}/portlibs/switch/include/SDL2")
+    endif()
   endif()
 endif()
 include_directories(SYSTEM "${SDL2_INCLUDE_DIR}")
 list(APPEND LIBS "${SDL2_LIBRARY}")
 
 # ZLib
-find_package(ZLIB REQUIRED)
-if(ZLIB_INCLUDE_DIR)
-  include_directories(SYSTEM "${ZLIB_INCLUDE_DIR}")
+if(NOT XBOX)
+  find_package(ZLIB REQUIRED)
+  if(ZLIB_INCLUDE_DIR)
+    include_directories(SYSTEM "${ZLIB_INCLUDE_DIR}")
+  endif()
 endif()
 list(APPEND LIBS "${ZLIB_LIBRARY}")
 
-# GL
-if(NOT GL_LIBRARY)
-  if(WIN32)
-    set(GL_LIBRARY opengl32)
-  elseif(NINTENDO_SWITCH)
-    set(GL_LIBRARY EGL glapi drm_nouveau)
-  elseif(APPLE)
-    set(GL_LIBRARY "-framework OpenGL")
-  else()
-    set(GL_LIBRARY GL)
+# GL — Xbox uses pbkit directly; no external GL lib needed
+if(NOT XBOX)
+  if(NOT GL_LIBRARY)
+    if(WIN32)
+      set(GL_LIBRARY opengl32)
+    elseif(NINTENDO_SWITCH)
+      set(GL_LIBRARY EGL glapi drm_nouveau)
+    elseif(APPLE)
+      set(GL_LIBRARY "-framework OpenGL")
+    else()
+      set(GL_LIBRARY GL)
+    endif()
   endif()
+  list(APPEND LIBS "${GL_LIBRARY}")
 endif()
-list(APPEND LIBS "${GL_LIBRARY}")
 
 # Platform-specific extra libs
 if(NOT EXTRA_LIBRARIES)
-  if(WIN32)
+  if(XBOX)
+    # EXTRA_LIBRARIES set by toolchain-nxdk.cmake
+    set(EXTRA_LIBRARIES "")
+  elseif(WIN32)
     set(EXTRA_LIBRARIES dbghelp -static-libstdc++)
   elseif(NINTENDO_SWITCH)
     set(EXTRA_LIBRARIES stdc++ pthread)
@@ -259,6 +279,23 @@ list(APPEND LIBS "${EXTRA_LIBRARIES}")
 
 file(GLOB_RECURSE SRC_PORT "${CMAKE_SOURCE_DIR}/port/*.c")
 file(GLOB_RECURSE SRC_PORT_CXX "${CMAKE_SOURCE_DIR}/port/*.cpp")
+
+if(XBOX)
+  # On Xbox we use our own system/crash layer and NV2A/Xbox-WM backends.
+  # Exclude the SDL2 window manager, OpenGL renderer, GLAD loader, and the
+  # POSIX/Win32 system+crash files that assume a desktop OS.
+  list(FILTER SRC_PORT EXCLUDE REGEX ".*/port/fast3d/glad/.*")
+  list(FILTER SRC_PORT_CXX EXCLUDE REGEX ".*/port/fast3d/gfx_opengl\\.cpp")
+  list(FILTER SRC_PORT_CXX EXCLUDE REGEX ".*/port/fast3d/gfx_sdl2?\\.cpp")
+  list(FILTER SRC_PORT EXCLUDE REGEX ".*/port/src/system\\.c")
+  list(FILTER SRC_PORT EXCLUDE REGEX ".*/port/src/crash\\.c")
+  # main.c is kept but its int main() is guarded with #ifndef PLATFORM_XBOX
+  # Xbox-specific sources are in port/src/xbox/
+  file(GLOB SRC_PORT_XBOX "${CMAKE_SOURCE_DIR}/port/src/xbox/*.c")
+  file(GLOB SRC_PORT_XBOX_CXX "${CMAKE_SOURCE_DIR}/port/src/xbox/*.cpp")
+  list(APPEND SRC_PORT     ${SRC_PORT_XBOX})
+  list(APPEND SRC_PORT_CXX ${SRC_PORT_XBOX_CXX})
+endif()
 
 file(GLOB_RECURSE SRC_GAME "${CMAKE_SOURCE_DIR}/src/game/*.c")
 
@@ -357,4 +394,23 @@ if(NINTENDO_SWITCH)
     COMMAND aarch64-none-elf-strip -o ${CMAKE_BINARY_DIR}/${BIN_NAME}.stripped.elf ${CMAKE_BINARY_DIR}/${BIN_NAME}.elf
     COMMAND elf2nro ${CMAKE_BINARY_DIR}/${BIN_NAME}.stripped.elf ${CMAKE_BINARY_DIR}/${BIN_NAME}.nro --icon=${CMAKE_SOURCE_DIR}/dist/nswitch/icon.jpg --nacp=${BIN_NAME}.nacp
   )
+endif()
+
+if(XBOX)
+  # Convert the PE .exe produced by lld into an Xbox XBE using cxbe.
+  # The XBE title ID and title name can be adjusted here.
+  if(CXBE_EXECUTABLE)
+    add_custom_command(TARGET pd POST_BUILD
+      COMMAND ${CXBE_EXECUTABLE}
+        -OUT:${CMAKE_BINARY_DIR}/default.xbe
+        -TITLE:"Perfect Dark X"
+        -TITLEID:PD-X01
+        -STACK:0x4000
+        ${CMAKE_BINARY_DIR}/${BIN_NAME}.exe
+      COMMENT "Converting ${BIN_NAME}.exe -> default.xbe"
+    )
+  else()
+    message(WARNING "cxbe not found — skipping XBE conversion. "
+      "Set CXBE_EXECUTABLE or add NXDK tools to your PATH.")
+  endif()
 endif()
