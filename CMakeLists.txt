@@ -420,12 +420,13 @@ if(XBOX)
   # Convert the PE .exe produced by lld into an Xbox XBE using cxbe.
   # The XBE title ID and title name can be adjusted here.
   if(CXBE_EXECUTABLE)
+    # Note: this cxbe (NXDK Docker) only supports -OUT, -TITLE, -MODE, -LOGO,
+    # -DEBUGPATH.  The -TITLEID and -STACK flags are not recognised; stack size
+    # is controlled by nxdk-link's -stack:65536 flag instead.
     add_custom_command(TARGET pd POST_BUILD
       COMMAND ${CXBE_EXECUTABLE}
         -OUT:${CMAKE_BINARY_DIR}/default.xbe
         -TITLE:"Perfect Dark X"
-        -TITLEID:PD-X01
-        -STACK:0x4000
         ${CMAKE_BINARY_DIR}/${BIN_NAME}.exe
       COMMENT "Converting ${BIN_NAME}.exe -> default.xbe"
     )
