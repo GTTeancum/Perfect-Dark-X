@@ -238,7 +238,24 @@ include_directories(SYSTEM "${SDL2_INCLUDE_DIR}")
 list(APPEND LIBS "${SDL2_LIBRARY}")
 
 # ZLib
-if(NOT XBOX)
+if(XBOX)
+  # NXDK ships zlib as lib/libzlib.lib; headers live in lib/zlib/
+  set(ZLIB_LIBRARY "${NXDK_DIR}/lib/libzlib.lib")
+  # Try the most common locations inside the NXDK tree
+  find_path(NXDK_ZLIB_INCLUDE_DIR zlib.h
+    PATHS
+      "${NXDK_DIR}/lib/zlib"
+      "${NXDK_DIR}/include"
+      "${NXDK_DIR}/lib/zlib/include"
+    NO_DEFAULT_PATH)
+  if(NXDK_ZLIB_INCLUDE_DIR)
+    include_directories(SYSTEM "${NXDK_ZLIB_INCLUDE_DIR}")
+    message(STATUS "NXDK zlib.h: ${NXDK_ZLIB_INCLUDE_DIR}")
+  else()
+    message(WARNING "zlib.h not found in NXDK — rzip_c.c will fail.  "
+      "Set NXDK_ZLIB_INCLUDE_DIR manually if the header is elsewhere.")
+  endif()
+else()
   find_package(ZLIB REQUIRED)
   if(ZLIB_INCLUDE_DIR)
     include_directories(SYSTEM "${ZLIB_INCLUDE_DIR}")

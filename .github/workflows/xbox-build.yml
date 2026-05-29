@@ -47,6 +47,10 @@ jobs:
               find "$NXDK_DIR/lib" -maxdepth 2 \( -name "*.a" -o -name "*.lib" \) | sort
 
               echo ""
+              echo "=== zlib.h location ==="
+              find "$NXDK_DIR" -name "zlib.h" 2>/dev/null | head -5
+
+              echo ""
               echo "=== xboxkrnl header location ==="
               find "$NXDK_DIR" -name "xboxkrnl.h" 2>/dev/null | head -5
 
