@@ -386,7 +386,11 @@ static const char *nv2a_get_name(void)
 
 static int nv2a_get_max_texture_size(void)
 {
-    return 2048;  // NV2A supports up to 4096, but 2048 is safe
+    // NV2A supports up to 4096, but on the 64 MB Xbox this value also sizes
+    // gfx_pc's tex_upload_buffer (max_tex_size^2 * 4 bytes): 2048 -> 16 MB,
+    // 1024 -> 4 MB. PD's N64 textures are TMEM-bound (<=4 KB); the only large
+    // case is framebuffer-as-texture at 640x480, which fits comfortably in 1024.
+    return 1024;
 }
 
 static struct GfxClipParameters nv2a_get_clip_parameters(void)
