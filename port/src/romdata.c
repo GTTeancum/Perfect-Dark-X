@@ -235,10 +235,15 @@ static inline void romdataLoadRom(void)
 	// returns negative, so a "< 0" test would never fire.  Require the full
 	// uncompressed length, otherwise the data segment (and the file offset
 	// table within it) is corrupt.
+	extern volatile int g_RzipLastRet;
+	extern volatile unsigned int g_RzipLastTotal;
+	extern volatile unsigned int g_RzipLastCalls;
 	const s32 inflated = rzipInflate(zipped, dataSeg, scratch);
 	if (inflated < (s32)dataSegLen) {
 		free(dataSeg);
-		sysFatalError("Could not inflate data segment (got %d of %u bytes).", inflated, dataSegLen);
+		sysFatalError("Could not inflate data segment (got %d of %u bytes; zlib ret=%d total=%u calls=%u; src=%02x%02x%02x%02x%02x).",
+			inflated, dataSegLen, g_RzipLastRet, g_RzipLastTotal, g_RzipLastCalls,
+			zipped[0], zipped[1], zipped[2], zipped[3], zipped[4]);
 	}
 
 	romDataSeg = dataSeg;

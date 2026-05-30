@@ -7,6 +7,12 @@
 
 void *var80091558; // g_RzipUnused
 
+// Diagnostics: last inflate() return code and produced length, so a failed
+// data-segment inflate can be diagnosed post-mortem / in the fatal message.
+volatile int g_RzipLastRet   = 0xdead;
+volatile unsigned int g_RzipLastTotal = 0;
+volatile unsigned int g_RzipLastCalls = 0;
+
 bool rzipIs1172(void *buffer)
 {
 	const u8* src = buffer;
@@ -51,6 +57,9 @@ static inline s32 rzipInflate1173(z_stream *strm, u8 *src, void *dst, u32 dstLen
 	// offset table.  Loop until the stream ends or the output buffer is full.
 	for (;;) {
 		const int ret = inflate(strm, Z_SYNC_FLUSH);
+		g_RzipLastRet = ret;
+		g_RzipLastTotal = (unsigned int)strm->total_out;
+		g_RzipLastCalls++;
 		if (ret == Z_STREAM_END) {
 			break;
 		}
