@@ -2,10 +2,30 @@
 // and https://github.com/doomhack/perfect_dark/blob/master/src/lib/rzip.c
 
 #include <zlib.h>
+#ifdef PLATFORM_XBOX
+#include <stdlib.h>   // malloc/free for the Z_SOLO allocator callbacks
+#endif
 
 #include "lib/rzip.h"
 
 void *var80091558; // g_RzipUnused
+
+#ifdef PLATFORM_XBOX
+// NXDK builds zlib with Z_SOLO, which omits the default zcalloc/zcfree.  In
+// that mode inflateInit2_ returns Z_STREAM_ERROR unless the caller supplies
+// zalloc/zfree.  Provide simple malloc/free-backed allocators.
+static void *rzipZalloc(void *opaque, unsigned int items, unsigned int size)
+{
+	(void)opaque;
+	return malloc((size_t)items * (size_t)size);
+}
+
+static void rzipZfree(void *opaque, void *address)
+{
+	(void)opaque;
+	free(address);
+}
+#endif
 
 // Diagnostics: last inflate() return code and produced length, so a failed
 // data-segment inflate can be diagnosed post-mortem / in the fatal message.
@@ -84,6 +104,13 @@ s32 rzipInflate(void *srcp, void *dst, void *scratch)
 	s32 ret = 0;
 	u8 *src = srcp;
 	z_stream strm = { 0 };
+
+#ifdef PLATFORM_XBOX
+	// Required for NXDK's Z_SOLO zlib build (no built-in allocator).
+	strm.zalloc = (voidpf)rzipZalloc;
+	strm.zfree  = (voidp)rzipZfree;
+	strm.opaque = Z_NULL;
+#endif
 
 	ret = inflateInit2(&strm, -15);
 	g_RzipLastRet = ret;                       // capture init return code
