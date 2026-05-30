@@ -86,6 +86,8 @@ s32 rzipInflate(void *srcp, void *dst, void *scratch)
 	z_stream strm = { 0 };
 
 	ret = inflateInit2(&strm, -15);
+	g_RzipLastRet = ret;                       // capture init return code
+	g_RzipLastTotal = (unsigned int)sizeof(z_stream); // our sizeof(z_stream)
 	if (ret != Z_OK) {
 		rmonPrintf("rzipInflate: inflateInit2 failed: %d\n", ret);
 		return 0;
