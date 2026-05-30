@@ -258,9 +258,11 @@ def validate_rom(path: str) -> None:
 _PD_INI = (
     b"[Game]\n"
     b"SkipIntro = 1\n"
-    # 8 MB game heap: the 32 MB ROM is resident on a 64 MB Xbox, so a larger
-    # heap can't get a contiguous block (matches g_OsMemSizeMb default).
-    b"MemorySize = 8\n"
+    # 12 MB game heap = 4 MB onboard + 8 MB expansion stage pool.  MUST be > 8 MB
+    # (MEMP_EXPANSION_POOL_SIZE): at exactly 8 MB mempSetHeap never creates the
+    # expansion stage pool, but IS8MB mode routes stage allocs to it -> NULL ->
+    # crash in lvReset.  Keep in sync with g_OsMemSizeMb in main_xbox.c.
+    b"MemorySize = 12\n"
     b"\n"
     b"[Video]\n"
     b"DefaultFullscreen = 1\n"

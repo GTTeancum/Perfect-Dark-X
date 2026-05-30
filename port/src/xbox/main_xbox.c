@@ -40,10 +40,17 @@
 volatile unsigned int g_DbgMark = 0;
 
 u32 g_OsMemSize    = 0;
-// 8 MB = real N64 Expansion Pak size and the right budget on a 64 MB Xbox:
-// the 32 MB ROM stays resident, so a 16 MB game heap can't get a contiguous
-// block.  memp/vminit already branch correctly for sizes > 4 MB.
-s32 g_OsMemSizeMb  = 8;
+// This value sizes BOTH the emulated N64 RAM (osMemSize, drives IS8MB game
+// logic) AND the memp heap (g_MempHeapSize = g_OsMemSize).  It MUST be strictly
+// greater than MEMP_EXPANSION_POOL_SIZE (8 MB): mempSetHeap only creates the
+// expansion stage pool when heaplen > 8 MB (heaplen -= 8 MB for onboard,
+// expansion = 8 MB).  At exactly 8 MB the expansion pool is never created, yet
+// IS8MB mode (>4 MB) routes stage allocations to it -> mempGetNextStageAllocation
+// returns NULL -> corruption/crash in lvReset.  12 MB = 4 MB onboard + 8 MB
+// expansion stage pool, matching the desktop default's >8 MB layout while fitting
+// the 64 MB Xbox budget (32 MB ROM resident + ~15 MB free after the texture fix).
+// NOTE: Game.MemorySize in pd.ini overrides this; keep them in sync.
+s32 g_OsMemSizeMb  = 12;
 u8  g_Is4Mb        = 0;
 s8  g_Resetting    = 0;
 
