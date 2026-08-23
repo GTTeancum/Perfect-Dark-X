@@ -28,18 +28,22 @@
 #include "types.h"
 #ifndef PLATFORM_N64
 #include "input.h"
+#include "platform.h"
 #endif
 
 void menuStop(void)
 {
 #ifndef PLATFORM_N64
+	PD_DBGMARK(280);
 	inputAutoLockMouse(true);
 #endif
 
 	if (var80062944) {
 		var80062944 = 0;
 		var80062948 = 0;
+		PD_DBGMARK(281);
 		joySetDefaultPfsPollInterval();
+		PD_DBGMARK(282);
 		func0f110bf8();
 	}
 }

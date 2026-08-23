@@ -34,6 +34,11 @@ endif()
 
 set(ROMID "ntsc-final" CACHE STRING "Which ROM to build an executable for: ntsc-final, pal-final or jpn-final")
 option(FORCE_CROSSCOMPILE "Force cross compiling" NO)
+option(PD_XBOX_TRACE_MARKS "Emit high-frequency Xbox crash breadcrumbs to COM1" OFF)
+option(PD_XBOX_RENDER_QUALIFY_EFFECTS
+  "Stress stochastic-alpha and character-cloak rendering on Xbox" OFF)
+set(PD_XBOX_RENDER_TRACE_FRAME "0" CACHE STRING
+    "Emit one frame of aggregate NV2A draw-state diagnostics to COM1")
 
 # Determine target arch
 
@@ -156,6 +161,15 @@ endif()
 
 if(XBOX)
   add_definitions(-DPLATFORM_XBOX=1)
+  if(PD_XBOX_TRACE_MARKS)
+    add_definitions(-DPD_XBOX_TRACE_MARKS=1)
+  endif()
+  if(PD_XBOX_RENDER_QUALIFY_EFFECTS)
+    add_definitions(-DPD_XBOX_RENDER_QUALIFY_EFFECTS=1)
+  endif()
+  if(NOT PD_XBOX_RENDER_TRACE_FRAME STREQUAL "0")
+    add_definitions(-DPD_XBOX_RENDER_TRACE_FRAME=${PD_XBOX_RENDER_TRACE_FRAME})
+  endif()
   # Xbox is Pentium III (SSE1 only, no SSE2); disable SIMD in minimp3
   add_definitions(-DMINIMP3_NO_SIMD=1)
 endif()
@@ -171,19 +185,30 @@ include_directories("${CMAKE_SOURCE_DIR}/src/lib/ultra/audio")
 include_directories("${CMAKE_SOURCE_DIR}/port/include")
 include_directories("${CMAKE_BINARY_DIR}/port/include")
 
-# Set Release optimization to -Og until I fix the -O2 issues
-if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug"))
+# The console build must fit its simulation, audio and renderer work inside a
+# 60 Hz frame on a 733 MHz Pentium III. Keep the conservative desktop setting,
+# but build Xbox Release with real optimization and inlining.
+if(XBOX)
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-Og -fno-inline-functions)
+  else()
+    add_compile_options(-O2)
+  endif()
+elseif(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug"))
   add_compile_options(-Og)
 endif()
 
 # Common CFLAGS
 add_compile_options(
-  -fno-inline-functions
   -fno-strict-aliasing
   -funsigned-char
   -fwrapv
   -include "versioninfo.h"
 )
+
+if(NOT XBOX)
+  add_compile_options(-fno-inline-functions)
+endif()
 
 # Common warning flags
 add_compile_options(
@@ -299,6 +324,11 @@ list(APPEND LIBS "${EXTRA_LIBRARIES}")
 
 file(GLOB_RECURSE SRC_PORT "${CMAKE_SOURCE_DIR}/port/*.c")
 file(GLOB_RECURSE SRC_PORT_CXX "${CMAKE_SOURCE_DIR}/port/*.cpp")
+
+# port/src/xbox/ is appended explicitly in the XBOX branch below; stop the
+# recursive globs above from pulling it into non-Xbox builds as well.
+list(FILTER SRC_PORT     EXCLUDE REGEX ".*/port/src/xbox/.*")
+list(FILTER SRC_PORT_CXX EXCLUDE REGEX ".*/port/src/xbox/.*")
 
 if(XBOX)
   # On Xbox we use our own system/crash layer and NV2A/Xbox-WM backends.

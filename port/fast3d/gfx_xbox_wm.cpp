@@ -33,6 +33,7 @@ extern "C" {
 #include "platform.h"
 #include "system.h"
 #include "gfx_xbox_wm.h"
+#include "../src/xbox/serial_xbox.h"
 
 // ── Supported display modes ───────────────────────────────────────────────────
 
@@ -95,6 +96,13 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
         m.width, m.height, m.progressive ? "progressive" : "interlaced");
 
     XVideoSetMode(m.width, m.height, m.hal_mode.bpp, m.hal_mode.refresh);
+
+    // The renderer uses one full-size, non-rotating surface as a scratch render
+    // target.  Persistent game framebuffers are copied to/from their own
+    // compact texture allocations, so a single extra pbkit surface is enough
+    // for menu blur and any future offscreen pass without spending ~1.2 MiB on
+    // each of the game's many 16x16 capture buffers.
+    pb_extra_buffers(1);
 
     // Initialise pbkit (NV2A push-buffer engine)
     int pb_err = pb_init();
@@ -233,6 +241,27 @@ static void xbox_wm_swap_buffers_begin(void)
 
 static void xbox_wm_swap_buffers_end(void)
 {
+    // Frame heartbeat on the UART: the only way to tell "loop alive but
+    // drawing nothing" from "loop blocked" without taking the window.
+    {
+        static unsigned frames = 0;
+        static ULONGLONG last = 0;
+        if ((++frames % 60u) == 0u) {
+            const ULONGLONG now = qpc_now();
+            char hb[96];
+            if (last && now > last) {
+                const ULONGLONG dt = now - last;
+                const unsigned milli = (unsigned)((60ULL * g_perf_freq * 1000ULL) / dt);
+                snprintf(hb, sizeof(hb), "frame %u  fps %u.%03u\n",
+                         frames, milli / 1000u, milli % 1000u);
+            } else {
+                snprintf(hb, sizeof(hb), "frame %u  (first)\n", frames);
+            }
+            last = now;
+            serialPuts(hb);
+        }
+    }
+
     if (g_target_fps > 0) {
         // Simple busy-wait FPS limiter
         const ULONGLONG frame_ns = g_perf_freq / (ULONGLONG)g_target_fps;

@@ -20,7 +20,7 @@
 typedef unsigned char  Byte;
 typedef unsigned int   uInt;
 typedef unsigned long  uLong;
-typedef Byte          *Bytef;
+typedef Byte           Bytef;   /* real zlib: "typedef Byte FAR Bytef" - NOT a pointer */
 typedef long           z_off_t;
 typedef void          *voidp;
 typedef void          *voidpf;

@@ -238,17 +238,20 @@ void lvUpdateMiscSfx(void)
 
 void lvReset(s32 stagenum)
 {
+	PD_DBGMARK(400);
 	lvFadeReset();
 
 	var80084014 = false;
 	var80084010 = 0;
 
 #if VERSION >= VERSION_NTSC_1_0
+	PD_DBGMARK(401);
 	joyLockCyclicPolling();
 
 	g_Vars.joydisableframestogo = 10;
 #else
 	if (joyIsCyclicPollingEnabled()) {
+		PD_DBGMARK(402);
 		joyDisableCyclicPolling(760, "lv.c");
 
 		g_Vars.joydisableframestogo = 10;
@@ -259,6 +262,7 @@ void lvReset(s32 stagenum)
 	g_Vars.paksneededformenu = 0;
 	g_Vars.stagenum = stagenum;
 
+	PD_DBGMARK(403);
 	cheatsReset();
 
 	var80084040 = true;
@@ -270,8 +274,10 @@ void lvReset(s32 stagenum)
 
 #if VERSION >= VERSION_NTSC_1_0
 	g_Vars.lvupdate60f = 1.0f;
+	PD_DBGMARK(404);
 	g_Vars.lvupdate60frealprev = PALUPF(1);
 #else
+	PD_DBGMARK(405);
 	g_Vars.lvupdate60frealprev = PALUPF(1);
 	g_Vars.lvupdate60f = 1.0f;
 #endif
@@ -299,18 +305,26 @@ void lvReset(s32 stagenum)
 
 	g_MiscAudioHandle = NULL;
 
+	PD_DBGMARK(406);
 	musicReset();
+	PD_DBGMARK(407);
 	modelmgrSetLvResetting(true);
+	PD_DBGMARK(408);
 	surfaceReset();
+	PD_DBGMARK(409);
 	texReset();
+	PD_DBGMARK(410);
 	textReset();
+	PD_DBGMARK(411);
 	hudmsgsReset();
 
 	if (stagenum == STAGE_TEST_OLD) {
+		PD_DBGMARK(412);
 		titleReset();
 	}
 
 	if (stagenum == STAGE_TITLE) {
+		PD_DBGMARK(413);
 		titleReset();
 	} else if (stagenum == STAGE_BOOTPAKMENU) {
 		// empty
@@ -322,18 +336,25 @@ void lvReset(s32 stagenum)
 		s32 i;
 		s32 j;
 
+		PD_DBGMARK(414);
 		tilesReset();
+		PD_DBGMARK(415);
 		bgReset(g_Vars.stagenum);
+		PD_DBGMARK(416);
 		bgBuildTables(g_Vars.stagenum);
+		PD_DBGMARK(417);
 		skyReset(g_Vars.stagenum);
 
 		if (g_Vars.normmplayerisrunning) {
+			PD_DBGMARK(418);
 			musicSetStageAndStartMusic(stagenum);
 		} else {
+			PD_DBGMARK(419);
 			musicSetStage(stagenum);
 		}
 
 		if (g_Vars.normmplayerisrunning) {
+			PD_DBGMARK(420);
 			mpApplyLimits();
 		}
 
@@ -365,24 +386,43 @@ void lvReset(s32 stagenum)
 		}
 	}
 
+	PD_DBGMARK(421);
 	mpSetDefaultNamesIfEmpty();
+	PD_DBGMARK(422);
 	animsReset();
+	PD_DBGMARK(423);
 	objectivesReset();
+	PD_DBGMARK(424);
 	vtxstoreReset();
+	PD_DBGMARK(425);
 	modelmgrReset();
+	PD_DBGMARK(426);
 	psReset();
+	PD_DBGMARK(427);
 	setupLoadFiles(stagenum);
+	PD_DBGMARK(428);
 	scenarioReset();
+	PD_DBGMARK(429);
 	varsReset();
+	PD_DBGMARK(430);
 	propsReset();
+	PD_DBGMARK(431);
 	chrmgrReset();
+	PD_DBGMARK(432);
 	bodiesReset(stagenum);
+	PD_DBGMARK(433);
 	setupCreateProps(stagenum);
+	PD_DBGMARK(434);
 	tagsReset();
+	PD_DBGMARK(435);
 	explosionsReset();
+	PD_DBGMARK(436);
 	smokeReset();
+	PD_DBGMARK(437);
 	sparksReset();
+	PD_DBGMARK(438);
 	weatherReset();
+	PD_DBGMARK(439);
 	lvResetMiscSfx();
 
 	switch (g_Vars.stagenum) {
@@ -392,80 +432,117 @@ void lvReset(s32 stagenum)
 	case STAGE_DEFECTION:
 	case STAGE_ATTACKSHIP:
 	case STAGE_TEST_OLD:
+		PD_DBGMARK(440);
 		starsReset();
 		break;
 	}
 
+	PD_DBGMARK(441);
 	func0f0099a4();
+	PD_DBGMARK(442);
 	boltbeamsReset();
+	PD_DBGMARK(443);
 	lasersightsReset();
+	PD_DBGMARK(444);
 	stub0f013540();
+	PD_DBGMARK(445);
 	shardsReset();
+	PD_DBGMARK(446);
 	frReset();
 
 	if (g_Vars.stagenum == STAGE_TITLE) {
 		// empty
 	} else if (stagenum == STAGE_BOOTPAKMENU) {
+		PD_DBGMARK(447);
 		setCurrentPlayerNum(0);
+		PD_DBGMARK(448);
 		menuReset();
 	} else if (stagenum == STAGE_4MBMENU) {
+		PD_DBGMARK(449);
 		setCurrentPlayerNum(0);
+		PD_DBGMARK(450);
 		menuReset();
 	} else if (stagenum == STAGE_CREDITS) {
+		PD_DBGMARK(451);
 		creditsReset();
 	} else {
 		s32 i;
 
+		PD_DBGMARK(452);
 		utilsReset();
+		PD_DBGMARK(453);
 		casingsReset();
 
 		for (i = 0; i < PLAYERCOUNT(); i++) {
+			PD_DBGMARK(454);
 			setCurrentPlayerNum(i);
 			g_Vars.currentplayer->usedowntime = 0;
 			g_Vars.currentplayer->invdowntime = g_Vars.currentplayer->usedowntime;
 
+			PD_DBGMARK(455);
 			menuReset();
+			PD_DBGMARK(456);
 			amReset();
+			PD_DBGMARK(457);
 			invReset();
+			PD_DBGMARK(458);
 			bgunReset();
+			PD_DBGMARK(459);
 			playerLoadDefaults();
+			PD_DBGMARK(460);
 			playerReset();
+			PD_DBGMARK(461);
 			playerSpawn();
+			PD_DBGMARK(462);
 			bheadReset();
 
 			if (g_Vars.normmplayerisrunning && (g_MpSetup.options & MPOPTION_TEAMSENABLED)) {
+				PD_DBGMARK(463);
 				playermgrCalculateAiBuddyNums();
 			}
 		}
 
+		PD_DBGMARK(464);
 		acousticReset();
+		PD_DBGMARK(465);
 		portalsReset();
+		PD_DBGMARK(466);
 		lightsReset();
+		PD_DBGMARK(467);
 		setCurrentPlayerNum(0);
 	}
 
 	if (g_Vars.lvmpbotlevel) {
+		PD_DBGMARK(468);
 		mpCalculateTeamIsOnlyAi();
 	}
 
+	PD_DBGMARK(469);
 	paksReset();
+	PD_DBGMARK(470);
 	sndResetCurMp3();
 
 	if (stagenum == STAGE_BOOTPAKMENU) {
+		PD_DBGMARK(471);
 		bootmenuReset();
 	}
 
 	if (stagenum == STAGE_4MBMENU) {
+		PD_DBGMARK(472);
 		fmbReset();
 	}
 
 	if (IS8MB()) {
+		PD_DBGMARK(473);
 		pheadReset();
 	}
 
+	PD_DBGMARK(474);
 	modelmgrSetLvResetting(false);
 	var80084018 = 1;
+	PD_DBGMARK(475);
 	schedResetArtifacts();
+	PD_DBGMARK(476);
 	lvSetPaused(0);
 
 #if PIRACYCHECKS
@@ -490,6 +567,7 @@ void lvReset(s32 stagenum)
 			buffer[1] = 0xffffffff;
 			buffer[2] = 0x020f0100;
 			buffer[3] = 0xcd31100b;
+			PD_DBGMARK(477);
 			osEepromLongWrite(&g_PiMesgQueue, address, (u8 *)&buffer, 0x10);
 			g_Paks[SAVEDEVICE_GAMEPAK].headercachecount = 0;
 		}
@@ -2070,10 +2148,12 @@ void lvTick(void)
 	s32 j;
 	s32 i;
 
+	PD_DBGMARK(500);
 	lvCheckPauseStateChanged();
 
 #if VERSION >= VERSION_NTSC_1_0
 	if (g_Vars.pakstocheck) {
+		PD_DBGMARK(501);
 		paksTick();
 	}
 #endif
@@ -2082,9 +2162,11 @@ void lvTick(void)
 		g_Vars.joydisableframestogo--;
 	} else if (g_Vars.joydisableframestogo == 0) {
 #if VERSION >= VERSION_NTSC_1_0
+		PD_DBGMARK(502);
 		joyUnlockCyclicPolling();
 #else
 		if (!joyIsCyclicPollingEnabled()) {
+			PD_DBGMARK(503);
 			joyEnableCyclicPolling(3278, "lv.c");
 		}
 #endif
@@ -2096,6 +2178,7 @@ void lvTick(void)
 			g_Vars.paksneededforgame = 0;
 		} else {
 			g_Vars.paksneededforgame = 0x1f;
+			PD_DBGMARK(504);
 			pakEnableRumbleForAllPlayers();
 		}
 
@@ -2103,6 +2186,7 @@ void lvTick(void)
 	}
 
 	if (IS4MB()) {
+		PD_DBGMARK(505);
 		vmPrintStatsIfEnabled();
 	}
 
@@ -2120,6 +2204,7 @@ void lvTick(void)
 			g_Vars.players[j]->joybutinhibit = 0xffffefff;
 		}
 	} else {
+		PD_DBGMARK(506);
 		s32 slowmo = lvGetSlowMotionType();
 		g_Vars.lvupdate240 = g_Vars.diffframe240;
 
@@ -2161,6 +2246,7 @@ void lvTick(void)
 						}
 					} else {
 						if (g_Vars.lvupdate240 > TICKS(8)) {
+							PD_DBGMARK(507);
 							g_Vars.lvupdate240 = TICKS(8);
 						}
 					}
@@ -2192,9 +2278,12 @@ void lvTick(void)
 	g_Vars.lvframe60 += g_Vars.lvupdate60;
 	g_Vars.lvframe240 += g_Vars.lvupdate240;
 	g_Vars.lvupdate60frealprev = g_Vars.lvupdate60freal;
+	PD_DBGMARK(508);
 	g_Vars.lvupdate60freal = PALUPF(g_Vars.lvupdate60f);
 
+	PD_DBGMARK(509);
 	bgunTickBoost();
+	PD_DBGMARK(510);
 	hudmsgsTick();
 
 	if ((joyGetButtonsPressedThisFrame(0, 0xffffffff) != 0
@@ -2218,7 +2307,9 @@ void lvTick(void)
 				|| joyGetStickY(3) > 10
 				|| joyGetStickY(3) < -10) && g_IsTitleDemo) {
 		if (g_Vars.stagenum != STAGE_TITLE) {
+			PD_DBGMARK(511);
 			titleSetNextMode(TITLEMODE_SKIP);
+			PD_DBGMARK(512);
 			mainChangeToStage(STAGE_TITLE);
 		}
 
@@ -2261,6 +2352,7 @@ void lvTick(void)
 		if (g_MpTimeLimit60 > 0) {
 			s32 elapsed = g_StageTimeElapsed60;
 			s32 nexttime = g_Vars.lvupdate60 + g_StageTimeElapsed60;
+			PD_DBGMARK(513);
 			s32 warntime = TICKS(g_MpTimeLimit60) - TICKS(3600);
 
 			// Show HUD message at one minute remaining
@@ -2268,6 +2360,7 @@ void lvTick(void)
 				s32 i;
 
 				for (i = 0; i < PLAYERCOUNT(); i++) {
+					PD_DBGMARK(514);
 					setCurrentPlayerNum(i);
 					hudmsgCreate(langGet(L_MISC_068), HUDMSGTYPE_DEFAULT); // "One minute left."
 				}
@@ -2275,6 +2368,7 @@ void lvTick(void)
 
 			if (elapsed < TICKS(g_MpTimeLimit60) && nexttime >= TICKS(g_MpTimeLimit60)) {
 				// Match is ending due to time limit reached
+				PD_DBGMARK(515);
 				mainEndStage();
 			}
 
@@ -2283,6 +2377,7 @@ void lvTick(void)
 					&& g_MiscAudioHandle == NULL
 					&& !lvIsPaused()
 					&& nexttime < TICKS(g_MpTimeLimit60)) {
+				PD_DBGMARK(516);
 				snd00010718(&g_MiscAudioHandle, 0, AL_VOL_FULL, AL_PAN_CENTER, SFX_ALARM_DEFAULT, 1, 1, -1, true);
 			}
 		}
@@ -2308,6 +2403,7 @@ void lvTick(void)
 
 			if (g_MpScoreLimit > 0) {
 				struct ranking rankings[MAX_MPCHRS];
+				PD_DBGMARK(517);
 				s32 count = mpGetPlayerRankings(rankings);
 
 				for (i = 0; i < count; i++) {
@@ -2319,6 +2415,7 @@ void lvTick(void)
 
 			if (g_MpTeamScoreLimit > 0) {
 				struct ranking rankings[MAX_MPCHRS];
+				PD_DBGMARK(518);
 				s32 count = mpGetTeamRankings(rankings);
 
 				for (i = 0; i < count; i++) {
@@ -2329,93 +2426,143 @@ void lvTick(void)
 			}
 
 			if (g_NumReasonsToEndMpMatch > 0 && numdying == 0) {
+				PD_DBGMARK(519);
 				mainEndStage();
 			}
 		}
 	}
 
 	g_StageTimeElapsed60 += g_Vars.lvupdate60;
+	PD_DBGMARK(520);
 	g_StageTimeElapsed1f = g_StageTimeElapsed60 / TICKS(60.0f);
 
+	PD_DBGMARK(521);
 	viSetUseZBuf(true);
 
 	if (g_Vars.stagenum == STAGE_TEST_OLD) {
+		PD_DBGMARK(522);
 		titleTickOld();
+		PD_DBGMARK(523);
 		musicTick();
 	}
 
 	if (g_Vars.stagenum == STAGE_TITLE) {
+		PD_DBGMARK(524);
 		titleTick();
+		PD_DBGMARK(525);
 		langTick();
+		PD_DBGMARK(526);
 		musicTick();
 	} else if (g_Vars.stagenum == STAGE_BOOTPAKMENU) {
+		PD_DBGMARK(527);
 		setCurrentPlayerNum(0);
 #if VERSION >= VERSION_PAL_BETA
+		PD_DBGMARK(528);
 		playerConfigureVi();
 #endif
+		PD_DBGMARK(529);
 		menuTick();
+		PD_DBGMARK(530);
 		musicTick();
+		PD_DBGMARK(531);
 		langTick();
+		PD_DBGMARK(532);
 		pakExecuteDebugOperations();
 	} else if (g_Vars.stagenum == STAGE_4MBMENU) {
+		PD_DBGMARK(533);
 		menuTick();
+		PD_DBGMARK(534);
 		musicTick();
+		PD_DBGMARK(535);
 		langTick();
+		PD_DBGMARK(536);
 		pakExecuteDebugOperations();
 	} else if (g_Vars.stagenum == STAGE_CREDITS) {
+		PD_DBGMARK(537);
 		musicTick();
+		PD_DBGMARK(538);
 		langTick();
 	} else {
+		PD_DBGMARK(539);
 		lvUpdateCutsceneTime();
+		PD_DBGMARK(540);
 		vtxstoreTick();
+		PD_DBGMARK(541);
 		lvUpdateSoloHandicaps();
+		PD_DBGMARK(542);
 		roomsTick();
+		PD_DBGMARK(543);
 		skyTick();
+		PD_DBGMARK(544);
 		casingsTick();
+		PD_DBGMARK(545);
 		shardsTick();
+		PD_DBGMARK(546);
 		sparksTick();
+		PD_DBGMARK(547);
 		wallhitsTick();
+		PD_DBGMARK(548);
 		splatsTick();
 
 		if (g_WeatherActive) {
+			PD_DBGMARK(549);
 			weatherTick();
 		}
 
 		if (g_NbombsActive) {
+			PD_DBGMARK(550);
 			nbombsTick();
 		}
 
+		PD_DBGMARK(551);
 		lvUpdateMiscSfx();
+		PD_DBGMARK(552);
 		sndTick();
+		PD_DBGMARK(553);
 		pakExecuteDebugOperations();
+		PD_DBGMARK(554);
 		lightingTick();
+		PD_DBGMARK(555);
 		modelmgrPrintCounts();
+		PD_DBGMARK(556);
 		boltbeamsTick();
+		PD_DBGMARK(557);
 		amTick();
+		PD_DBGMARK(558);
 		menuTick();
+		PD_DBGMARK(559);
 		scenarioTick();
 
 		if (!g_MainIsEndscreen) {
+			PD_DBGMARK(560);
 			propsTick();
 		}
 
+		PD_DBGMARK(561);
 		musicTick();
+		PD_DBGMARK(562);
 		langTick();
+		PD_DBGMARK(563);
 		propsTickPadEffects();
 
 		if (mainGetStageNum() == STAGE_CITRAINING) {
+			PD_DBGMARK(564);
 			struct trainingdata *trainingdata = dtGetData();
 
 			if ((g_Vars.currentplayer->prop->rooms[0] < ROOM_DISH_HOLO1 || g_Vars.currentplayer->prop->rooms[0] > ROOM_DISH_HOLO4)
 					&& g_Vars.currentplayer->prop->rooms[0] != ROOM_DISH_FIRINGRANGE
 					&& (trainingdata == NULL || trainingdata->intraining == false)) {
+				PD_DBGMARK(565);
 				chrUnsetStageFlag(NULL, STAGEFLAG_CI_IN_TRAINING);
 			}
 
+			PD_DBGMARK(566);
 			frTick();
 
 			if (g_Vars.lvupdate240 != 0) {
+				PD_DBGMARK(567);
 				dtTick();
+				PD_DBGMARK(568);
 				htTick();
 			}
 		}
@@ -2448,47 +2595,72 @@ void lvTickPlayer(void)
 
 void lvStop(void)
 {
+	PD_DBGMARK(250);
 	paksStop(true);
 
 	if (g_MiscAudioHandle && sndGetState(g_MiscAudioHandle)) {
+		PD_DBGMARK(251);
 		audioStop(g_MiscAudioHandle);
 	}
 
 	if (g_Vars.stagenum < STAGE_TITLE) {
+		PD_DBGMARK(252);
 		s32 bank = langGetLangBankIndexFromStagenum(g_Vars.stagenum);
+		PD_DBGMARK(253);
 		langClearBank(bank);
+		PD_DBGMARK(254);
 		stub0f015270();
 	}
 
+	PD_DBGMARK(255);
 	chrmgrStop();
+	PD_DBGMARK(256);
 	explosionsStop();
+	PD_DBGMARK(257);
 	smokeStop();
+	PD_DBGMARK(258);
 	stub0f015400();
+	PD_DBGMARK(259);
 	stub0f015410();
+	PD_DBGMARK(260);
 	shardsStop();
+	PD_DBGMARK(261);
 	stub0f0153f0();
+	PD_DBGMARK(262);
 	propsStop();
+	PD_DBGMARK(263);
 	objsStop();
+	PD_DBGMARK(264);
 	weatherStop();
+	PD_DBGMARK(265);
 	objectivesStop();
+	PD_DBGMARK(266);
 	stub0f015260();
+	PD_DBGMARK(267);
 	bgunStop();
+	PD_DBGMARK(268);
 	psStop();
+	PD_DBGMARK(269);
 	musicStop();
+	PD_DBGMARK(270);
 	hudmsgsStop();
 
 	if (g_Vars.stagenum < STAGE_TITLE) {
+		PD_DBGMARK(271);
 		bgStop();
 	}
 
+	PD_DBGMARK(272);
 	func00033dd8();
 
 	if (g_FileState == FILESTATE_CHANGINGAGENT) {
+		PD_DBGMARK(273);
 		menuPlaySound(MENUSOUND_EXPLOSION);
 		g_FileState = FILESTATE_UNSELECTED;
 	}
 
 #if VERSION >= VERSION_NTSC_1_0
+	PD_DBGMARK(274);
 	menuStop();
 #endif
 }

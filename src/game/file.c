@@ -4188,7 +4188,14 @@ void fileLoad(u8 *dst, u32 allocationlen, romptr_t *romaddrptr, struct fileinfo 
 #endif
 
 			dmaExec(scratch, *romaddrptr, romsize);
+#ifdef PLATFORM_N64
 			result = rzipInflate(scratch, dst, buffer);
+#else
+			// The port knows the exact compressed span. Passing it prevents
+			// zlib's fast inflater from reading beyond a stream which ends at
+			// the end of this allocation (for example CheadgrantZ on Xbox).
+			result = rzipInflateSized(scratch, romsize, dst, buffer);
+#endif
 
 #if VERSION < VERSION_NTSC_1_0
 			if (result == 0) {

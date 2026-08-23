@@ -4,6 +4,12 @@
 *.exe
 pd.*.z64
 build
+/build-pc/
+/build-xbox/
+/scripts/output/
+/scripts/*.log
+/scripts/*.txt
+/*.z64
 .flatpak-builder
 extracted
 src/assets/*/*.bin

@@ -14,7 +14,9 @@
 #include <list>
 #include <stack>
 #include <string>
-#include <iostream>
+#ifndef PLATFORM_XBOX
+#include <iostream> // unused here; pulls in libc++ locale, which NXDK's pdclib cannot satisfy
+#endif
 #include <memory>
 #include <limits>
 
@@ -489,6 +491,19 @@ static void gfx_generate_cc(struct ColorCombiner* comb, const ColorCombinerKey& 
     comb->used_textures[1] = used_textures[1];
     // comb->prg = gfx_lookup_or_create_shader_program(shader_id0, shader_id1);
     memcpy(comb->shader_input_mapping, shader_input_mapping, sizeof(shader_input_mapping));
+#ifdef PLATFORM_XBOX
+    sysLogPrintf(LOG_NOTE,
+                 "NV2A_MAP %08lx%08lx rgb=%x,%x,%x,%x,%x,%x,%x "
+                 "a=%x,%x,%x,%x,%x,%x,%x",
+                 (unsigned long)(shader_id0 >> 32), (unsigned long)shader_id0,
+                 shader_input_mapping[0][0], shader_input_mapping[0][1],
+                 shader_input_mapping[0][2], shader_input_mapping[0][3],
+                 shader_input_mapping[0][4], shader_input_mapping[0][5],
+                 shader_input_mapping[0][6], shader_input_mapping[1][0],
+                 shader_input_mapping[1][1], shader_input_mapping[1][2],
+                 shader_input_mapping[1][3], shader_input_mapping[1][4],
+                 shader_input_mapping[1][5], shader_input_mapping[1][6]);
+#endif
 }
 
 static struct ColorCombiner* gfx_lookup_or_create_color_combiner(const ColorCombinerKey& key) {
@@ -1293,7 +1308,16 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         (rdp.other_mode_l & (3 << 20)) == (G_BL_CLR_MEM << 20) && (rdp.other_mode_l & (3 << 16)) == (G_BL_1MA << 16);
     const bool use_fog = ((rdp.other_mode_l >> 30) == G_BL_CLR_FOG) || ((rdp.other_mode_l >> 26) == G_BL_A_FOG);
     const bool texture_edge = (rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA;
-    const bool use_noise = (rdp.other_mode_l & (3U << G_MDSFT_ALPHACOMPARE)) == G_AC_DITHER;
+    bool use_noise = (rdp.other_mode_l & (3U << G_MDSFT_ALPHACOMPARE)) == G_AC_DITHER;
+#if defined(PLATFORM_XBOX) && defined(PD_XBOX_RENDER_QUALIFY_EFFECTS)
+    // Qualification builds deliberately route ordinary translucent geometry
+    // through the exact stochastic-alpha implementation. This is not a game
+    // behavior change: the option is off by default and exists so the XEMU
+    // regression harness can exercise a path that few normal scenes submit.
+    if (use_alpha && !texture_edge) {
+        use_noise = true;
+    }
+#endif
     const bool use_2cyc = (rdp.other_mode_h & (3U << G_MDSFT_CYCLETYPE)) == G_CYC_2CYCLE;
     const bool alpha_threshold = (rdp.other_mode_l & (3U << G_MDSFT_ALPHACOMPARE)) == G_AC_THRESHOLD;
     const bool invisible = (rdp.other_mode_l & (3 << 24)) == (G_BL_0 << 24) && (rdp.other_mode_l & (3 << 20)) == (G_BL_CLR_MEM << 20);

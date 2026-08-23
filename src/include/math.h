@@ -1,7 +1,11 @@
 #ifndef IN_MATH_H
 #define IN_MATH_H
 
-#if !defined(PLATFORM_N64) && !defined(PLATFORM_XBOX)
+// NXDK does supply a math.h (lib/pdclib/platform/xbox/include/math.h), and
+// libc++'s <cmath> needs it -- without the chain below this header shadows it
+// and <cmath> fails on ::float_t, ::fpclassify, ::acosf and friends. C on Xbox
+// keeps the original freestanding behaviour.
+#if !defined(PLATFORM_N64) && (!defined(PLATFORM_XBOX) || defined(__cplusplus))
 #include_next <math.h>
 #undef M_PI
 #undef M_TAU

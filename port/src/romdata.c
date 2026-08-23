@@ -195,6 +195,14 @@ static inline void romdataLoadRom(void)
 	g_RomFile = fsFileLoad(romName, &g_RomFileSize);
 
 	if (!g_RomFile) {
+		// No ROM present. romdataInitFiles() can rebuild the file table from
+		// filenames.lst and romdataInitSegment() can source every segment from
+		// segs/, so run without one when a filename table is available.
+		if (fsFileSize("filenames.lst") > 0) {
+			sysLogPrintf(LOG_NOTE, "no ROM file; loading assets from loose files");
+			return;
+		}
+
 		sysFatalError("Could not open ROM file %s.\nEnsure that it is in the %s directory.", romName, fsFullPath(""));
 	}
 

@@ -1,0 +1,38 @@
+struct VertexInput {
+    float4 position : POSITION;
+    float4 color : DIFFUSE;
+    float4 specular : SPECULAR;
+    float2 tex0 : TEXCOORD0;
+    float2 tex1 : TEXCOORD1;
+};
+
+struct VertexOutput {
+    float4 position : POSITION;
+    float4 color : COLOR0;
+    float4 specular : COLOR1;
+    float4 tex0 : TEXCOORD0;
+    float4 tex1 : TEXCOORD1;
+    float4 tex2 : TEXCOORD2;
+};
+
+VertexOutput main(VertexInput input, uniform float4x4 viewport,
+                  uniform float4 noiseTransform)
+{
+    VertexOutput output;
+    float inverseW = 1.0f / input.position.w;
+    float4 ndc = float4(input.position.xyz * inverseW, 1.0f);
+    output.position = mul(ndc, viewport);
+    // NV2A vertex programs emit screen-space XYZ while preserving clip-space
+    // W.  The rasterizer forms reciprocal W itself for perspective-correct
+    // interpolation, and pbkit's W-buffer path compares this original W.
+    output.position.w = input.position.w;
+    output.color = input.color;
+    output.specular = input.specular;
+    output.tex0 = float4(input.tex0, 0.0f, 1.0f);
+    output.tex1 = float4(input.tex1, 0.0f, 1.0f);
+    float2 noiseCoord = output.position.xy * noiseTransform.xy
+                      + noiseTransform.zw;
+    output.tex2 = float4(noiseCoord * input.position.w,
+                         0.0f, input.position.w);
+    return output;
+}

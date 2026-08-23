@@ -51,6 +51,41 @@ static bool current_depth_mask;
 
 static uint32_t frame_count;
 
+// Optional framebuffer oracle for backend parity work. Setting
+// PD_GL_CAPTURE_DIR writes an RGB PPM every 600 rendered frames without
+// depending on window focus or desktop-compositor capture behaviour.
+static void gfx_opengl_capture_reference_frame(void) {
+    const char *dir = getenv("PD_GL_CAPTURE_DIR");
+    if (!dir || !dir[0] || frame_count == 0 || frame_count % 600 != 0) {
+        return;
+    }
+
+    const uint32_t width = gfx_current_window_dimensions.width;
+    const uint32_t height = gfx_current_window_dimensions.height;
+    if (width == 0 || height == 0) {
+        return;
+    }
+
+    std::vector<uint8_t> pixels((size_t)width * height * 3);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE,
+                 pixels.data());
+
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/pc-reference-%08u.ppm", dir,
+             frame_count);
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        return;
+    }
+    fprintf(file, "P6\n%u %u\n255\n", width, height);
+    const size_t row_bytes = (size_t)width * 3;
+    for (uint32_t y = height; y-- > 0;) {
+        fwrite(pixels.data() + (size_t)y * row_bytes, 1, row_bytes, file);
+    }
+    fclose(file);
+}
+
 static std::vector<Framebuffer> framebuffers;
 static size_t current_framebuffer;
 static float current_noise_scale;
@@ -1049,6 +1084,7 @@ static void gfx_opengl_end_frame(void) {
 }
 
 static void gfx_opengl_finish_render(void) {
+    gfx_opengl_capture_reference_frame();
 }
 
 static int gfx_opengl_create_framebuffer() {

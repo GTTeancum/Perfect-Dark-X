@@ -55,14 +55,17 @@ set(XBOX TRUE)
 set(_NXDK_CC  "")
 set(_NXDK_CXX "")
 
-if(WIN32)
+if(CMAKE_HOST_WIN32)
   set(EXE ".exe")
 else()
   set(EXE "")
 endif()
 
-if(EXISTS "${NXDK_DIR}/bin/nxdk-cc")
+set(_NXDK_USE_WRAPPER FALSE)
+
+if(EXISTS "${NXDK_DIR}/bin/nxdk-cc" AND NOT CMAKE_HOST_WIN32)
   # Pre-built Docker image — use NXDK wrapper scripts for compilation
+  set(_NXDK_USE_WRAPPER TRUE)
   set(_NXDK_CC  "${NXDK_DIR}/bin/nxdk-cc")
   set(_NXDK_CXX "${NXDK_DIR}/bin/nxdk-cxx")
   message(STATUS "NXDK compiler: using nxdk-cc/nxdk-cxx wrappers")
@@ -73,6 +76,10 @@ elseif(EXISTS "${NXDK_DIR}/tools/llvm/bin/clang${EXE}")
   message(STATUS "NXDK compiler: using bundled LLVM at ${NXDK_DIR}/tools/llvm/bin")
 else()
   # Fall back to system clang — must support i686-pc-windows-msvc cross target
+  # The empty normal variables set above would shadow find_program's cache
+  # entries, so clear them first or ${_NXDK_CC} reads back empty.
+  unset(_NXDK_CC)
+  unset(_NXDK_CXX)
   find_program(_NXDK_CC  NAMES clang   REQUIRED)
   find_program(_NXDK_CXX NAMES clang++ REQUIRED)
   message(STATUS "NXDK compiler: using system clang (${_NXDK_CC})")
@@ -110,7 +117,7 @@ endif()
 
 set(XBOX_TARGET_TRIPLE "i386-pc-win32")
 
-if(NOT EXISTS "${NXDK_DIR}/bin/nxdk-cc")
+if(NOT _NXDK_USE_WRAPPER)
   # When using raw clang we must set the target explicitly
   set(CMAKE_C_COMPILER_TARGET   "${XBOX_TARGET_TRIPLE}")
   set(CMAKE_CXX_COMPILER_TARGET "${XBOX_TARGET_TRIPLE}")
@@ -153,13 +160,42 @@ set(XBOX_C_FLAGS_LIST
   "-ffreestanding"
 )
 
-if(NOT EXISTS "${NXDK_DIR}/bin/nxdk-cc")
-  list(APPEND XBOX_C_FLAGS_LIST "--target=${XBOX_TARGET_TRIPLE}")
+if(NOT _NXDK_USE_WRAPPER)
+  # Everything nxdk-cc would have supplied. Kept in sync with ${NXDK_DIR}/bin/nxdk-cc.
+  list(APPEND XBOX_C_FLAGS_LIST
+    "--target=${XBOX_TARGET_TRIPLE}"
+    "-nostdlib"
+    "-fno-builtin"
+    "-Wno-builtin-macro-redefined"
+    "-DNXDK"
+    "-D__STDC__=1"
+    "-U__STDC_NO_THREADS__"
+    "-I${NXDK_DIR}/lib"
+    "-I${NXDK_DIR}/lib/winapi"
+    "-I${NXDK_DIR}/lib/xboxrt/vcruntime"
+    "-I${NXDK_DIR}/lib/pdclib/platform/xbox/include"
+    "-isystem" "${NXDK_DIR}/lib/pdclib/include"
+  )
 endif()
 
 string(JOIN " " XBOX_C_FLAGS_STR ${XBOX_C_FLAGS_LIST})
 set(CMAKE_C_FLAGS_INIT   "${XBOX_C_FLAGS_STR}")
-set(CMAKE_CXX_FLAGS_INIT "${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
+set(XBOX_CXX_EXTRA "")
+if(NOT _NXDK_USE_WRAPPER)
+  # nxdk-cxx supplies its own libc++. On a Windows host clang additionally
+  # auto-detects Visual Studio and pulls in the MSVC STL, which collides with
+  # pdclib (_Mbstatet, missing float math in the global namespace), so block it.
+  # -nostdinc++ alone is not enough: clang registers the MSVC toolchain as
+  # ordinary system includes for this target, so its <cmath> still wins over
+  # nxdk's libc++. -nostdsysteminc drops those while keeping clang's builtin
+  # headers (stddef.h, stdarg.h) available.
+  set(XBOX_CXX_EXTRA "-nostdinc++ -Xclang -nostdsysteminc -I${NXDK_DIR}/lib/libcxx/include")
+endif()
+
+# libcxx/include must precede the pdclib paths: libc++'s <cmath> includes
+# <math.h> expecting to land on its own wrapper, which then does #include_next
+# to reach pdclib's. If pdclib comes first that indirection is skipped.
+set(CMAKE_CXX_FLAGS_INIT "${XBOX_CXX_EXTRA} ${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
 
 # ── Linker flags ──────────────────────────────────────────────────────────────
 #
@@ -175,8 +211,21 @@ set(CMAKE_CXX_FLAGS_INIT "${XBOX_C_FLAGS_STR} -fno-rtti -fno-exceptions")
 # our main().  Forcing /entry:<ourfunc> skips all of that and faults early in
 # kernel space (observed: HLT with garbage CR2).  We define void main(void).
 
+if(_NXDK_USE_WRAPPER)
+  set(_NXDK_LD "-fuse-ld=nxdk-link")
+else()
+  # nxdk-link is a POSIX shell script. Invoke lld directly and reproduce the
+  # exact flags it passes, or the XBE will not boot.
+  set(_NXDK_LD "-fuse-ld=lld"
+      "-Wl,-subsystem:windows"
+      "-Wl,-fixed"
+      "-Wl,-base:0x00010000"
+      "-Wl,-stack:65536"
+      "-Wl,-merge:.edata=.edataxb")
+endif()
+
 set(NXDK_LINK_FLAGS_LIST
-  "-fuse-ld=nxdk-link"
+  ${_NXDK_LD}
   "--target=${XBOX_TARGET_TRIPLE}"
   # Emit an lld-link symbol map next to the .exe (basename.map) so EIP values
   # from the XEMU monitor can be translated to symbols.  Harmless at runtime.

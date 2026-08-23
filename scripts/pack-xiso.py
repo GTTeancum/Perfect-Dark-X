@@ -67,13 +67,15 @@ def _read_file(path_or_bytes) -> bytes:
 # ---------------------------------------------------------------------------
 # Directory encoder (BST)
 #
-# XDVDFS directories are right-skewed BSTs.  Each entry's left/right fields
-# are DWORD (4-byte) offsets from the start of the directory sector to the
-# child entry.  0xFFFF means "no child".
+# XDVDFS directories are binary search trees. Each entry's left/right fields
+# are DWORD (4-byte) offsets from the start of the directory table to the
+# child entry. Zero means "no child".
 #
 # We use a balanced BST: the median of the sorted file list is stored at
-# byte offset 0 (the tree root), left subtree follows, right subtree follows.
-# This gives O(log n) lookup and is what most XISO tooling produces.
+# byte offset 0 (the tree root), followed by its subtrees. Directory entries
+# may not cross a 2048-byte sector boundary, so gaps are inserted as needed.
+# This gives O(log n) lookup and matches the layout emitted by current XDVDFS
+# tooling.
 # ---------------------------------------------------------------------------
 
 def _entry_byte_size(name: str) -> int:
@@ -81,9 +83,6 @@ def _entry_byte_size(name: str) -> int:
     # 2(left) + 2(right) + 4(sector) + 4(size) + 1(attribs) + 1(name_len) + name
     raw = 14 + len(name.encode('ascii'))
     return (raw + 3) & ~3   # DWORD-aligned
-
-def _subtree_byte_size(files: list) -> int:
-    return sum(_entry_byte_size(f[0]) for f in files)
 
 def _encode_directory(files: list, base_offset: int = 0) -> bytes:
     """
@@ -94,39 +93,90 @@ def _encode_directory(files: list, base_offset: int = 0) -> bytes:
     base_offset : byte position of the root entry within the directory blob
                   (0 for the top-level call).
 
-    Returns the raw directory bytes; the root entry is always first.
+    Returns the raw directory bytes; the root entry is always first and no
+    entry straddles a sector boundary.
     """
     if not files:
         return b''
 
-    mid   = len(files) // 2
-    root  = files[mid]
-    left  = files[:mid]
-    right = files[mid + 1:]
+    if base_offset != 0:
+        raise ValueError('directory encoding must start at offset zero')
 
-    root_sz     = _entry_byte_size(root[0])
-    left_start  = base_offset + root_sz
-    right_start = left_start + _subtree_byte_size(left)
+    def make_tree(rows):
+        if not rows:
+            return None
+        mid = len(rows) // 2
+        return {
+            'row': rows[mid],
+            'left': make_tree(rows[:mid]),
+            'right': make_tree(rows[mid + 1:]),
+            'offset': 0,
+        }
 
-    left_dword  = (left_start  // 4) if left  else 0xFFFF
-    right_dword = (right_start // 4) if right else 0xFFFF
+    root = make_tree(files)
+    cursor = 0
 
-    name_bytes = root[0].encode('ascii')
-    entry  = struct.pack('<HHIIB',
-                left_dword, right_dword,
-                root[1],    # start_sector
-                root[2],    # byte size
-                root[3],    # attributes
-             )
-    entry += bytes([len(name_bytes)])
-    entry += name_bytes
-    entry += b'\x00' * ((-len(entry)) % 4)   # DWORD pad
+    def assign_offsets(node):
+        nonlocal cursor
+        if node is None:
+            return
 
-    assert len(entry) == root_sz
+        entry_size = _entry_byte_size(node['row'][0])
+        sector_offset = cursor % SECTOR_SIZE
 
-    return (entry
-            + _encode_directory(left,  left_start)
-            + _encode_directory(right, right_start))
+        if sector_offset and sector_offset + entry_size > SECTOR_SIZE:
+            cursor += SECTOR_SIZE - sector_offset
+
+        node['offset'] = cursor
+        cursor += entry_size
+        assign_offsets(node['left'])
+        assign_offsets(node['right'])
+
+    assign_offsets(root)
+
+    def validate_offsets(node):
+        if node is None:
+            return
+        entry_size = _entry_byte_size(node['row'][0])
+        if node['offset'] % SECTOR_SIZE + entry_size > SECTOR_SIZE:
+            raise AssertionError(
+                'XDVDFS directory entry crosses a sector boundary: %s'
+                % node['row'][0])
+        validate_offsets(node['left'])
+        validate_offsets(node['right'])
+
+    validate_offsets(root)
+    table = bytearray(b'\xff' * cursor)
+
+    def write_node(node):
+        if node is None:
+            return
+
+        row = node['row']
+        left_dword = node['left']['offset'] // 4 if node['left'] else 0
+        right_dword = node['right']['offset'] // 4 if node['right'] else 0
+
+        if left_dword > 0xffff or right_dword > 0xffff:
+            raise ValueError('directory table child offset exceeds XDVDFS limit')
+
+        name_bytes = row[0].encode('ascii')
+        entry = struct.pack(
+            '<HHIIBB',
+            left_dword,
+            right_dword,
+            row[1],       # start sector
+            row[2],       # byte size
+            row[3],       # attributes
+            len(name_bytes),
+        ) + name_bytes
+
+        offset = node['offset']
+        table[offset:offset + len(entry)] = entry
+        write_node(node['left'])
+        write_node(node['right'])
+
+    write_node(root)
+    return bytes(table)
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +312,7 @@ _PD_INI = (
     # (MEMP_EXPANSION_POOL_SIZE): at exactly 8 MB mempSetHeap never creates the
     # expansion stage pool, but IS8MB mode routes stage allocs to it -> NULL ->
     # crash in lvReset.  Keep in sync with g_OsMemSizeMb in main_xbox.c.
-    b"MemorySize = 12\n"
+    b"MemorySize = 16\n"
     b"\n"
     b"[Video]\n"
     b"DefaultFullscreen = 1\n"

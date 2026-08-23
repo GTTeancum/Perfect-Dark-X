@@ -1,8 +1,10 @@
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
 #ifdef PLATFORM_XBOX
 // strcasecmp provided by port/src/xbox/compat_xbox.c
 int strcasecmp(const char *a, const char *b);
+void serialPuts(const char *s);
 #endif
 #include <SDL.h>
 #include <PR/ultratypes.h>
@@ -81,7 +83,13 @@ static s32 numJoysticks = 0;
 static s32 useHIDAPI = 1;
 static s32 useRawInput = 0;
 
+#ifdef PLATFORM_XBOX
+// The Xbox has no mouse, and SDL_SetRelativeMouseMode() blocks under NXDK's
+// SDL without a mouse driver -- it hung the first stage transition.
+static s32 mouseEnabled = 0;
+#else
 static s32 mouseEnabled = 1;
+#endif
 static s32 mouseX, mouseY;
 static s32 mouseDX, mouseDY;
 static u32 mouseButtons;
@@ -884,6 +892,33 @@ s32 inputReadController(s32 idx, OSContPad *npad)
 		}
 	}
 
+#ifdef PLATFORM_XBOX
+	// Transition-only telemetry lets the repo-local XEMU harness prove that
+	// the emulated Xbox controller reached the N64 pad state used by the game.
+	if (idx == 0) {
+		static s32 havePrevious = 0;
+		static u32 previousButtons;
+		static s32 previousX, previousY, previousRX, previousRY;
+		if (!havePrevious || previousButtons != npad->button ||
+				previousX != npad->stick_x || previousY != npad->stick_y ||
+				previousRX != npad->rstick_x || previousRY != npad->rstick_y) {
+			char msg[112];
+			snprintf(msg, sizeof(msg),
+					"input: p0 buttons=%04X left=%d,%d right=%d,%d\n",
+					(unsigned)npad->button, (int)npad->stick_x,
+					(int)npad->stick_y, (int)npad->rstick_x,
+					(int)npad->rstick_y);
+			serialPuts(msg);
+			previousButtons = npad->button;
+			previousX = npad->stick_x;
+			previousY = npad->stick_y;
+			previousRX = npad->rstick_x;
+			previousRY = npad->rstick_y;
+			havePrevious = 1;
+		}
+	}
+#endif
+
 	return 0;
 }
 
@@ -1243,7 +1278,9 @@ s32 inputButtonPressed(s32 idx, u32 contbtn)
 void inputLockMouse(s32 lock)
 {
 	mouseLocked = !!lock;
+#ifndef PLATFORM_XBOX
 	SDL_SetRelativeMouseMode(mouseLocked);
+#endif
 }
 
 s32 inputMouseIsLocked(void)

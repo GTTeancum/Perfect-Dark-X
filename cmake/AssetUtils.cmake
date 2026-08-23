@@ -1,3 +1,10 @@
+# The header generators in tools/assetmgr are Python scripts that rely on a
+# shebang line. Windows cannot honour that, so resolve the interpreter once and
+# invoke them through it explicitly; this works on every platform.
+if(NOT Python3_EXECUTABLE)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+endif()
+
 # execute a header generator (execcmd) for every json file in jsonpath, collect headers in headerlist
 # note that this reads ROMID
 macro(generate_asset_headers jsonpath execcmd extraarg headerlist)
@@ -18,7 +25,7 @@ macro(generate_asset_headers jsonpath execcmd extraarg headerlist)
     add_custom_command(
       OUTPUT  ${HEADERNAME}
       DEPENDS ${JSON}
-      COMMAND ${execcmd} ${JSON} ${extraarg} --headers-only --romid=${ROMID}
+      COMMAND ${Python3_EXECUTABLE} ${execcmd} ${JSON} ${extraarg} --headers-only --romid=${ROMID}
     )
     list(APPEND ${headerlist} "${HEADERNAME}")
   endforeach()

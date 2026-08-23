@@ -62,7 +62,7 @@ void dbgFlushScreen(void)
 
     // Clear the back buffer to dark blue so text is readable
     uint32_t *p = pb_begin();
-    pb_push1(p, NV097_CLEAR_SURFACE, 0xF0); // clear colour
+    p = pb_push1(p, NV097_CLEAR_SURFACE, 0xF0); // clear colour
     pb_end(p);
 
     // Wait for the clear, then print text via pb_print

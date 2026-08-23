@@ -75,6 +75,10 @@
 #include "types.h"
 #include "system.h"
 
+#ifdef PLATFORM_XBOX
+#include "xbox/serial_xbox.h"
+#endif
+
 extern u8 *g_MempHeap;
 extern u32 g_MempHeapSize;
 
@@ -287,6 +291,14 @@ void mainProc(void)
 	while (true) {
 		PD_DBGMARK(104);
 		mainLoop();
+#ifdef PLATFORM_XBOX
+	{
+		static u32 mp = 0;
+		char b[64];
+		sprintf(b, "mainProc iter %u stage %d\n", ++mp, (int)g_StageNum);
+		serialPuts(b);
+	}
+#endif
 		PD_DBGMARK(105);
 	}
 }
@@ -322,6 +334,9 @@ void mainLoop(void)
 	s32 numplayers;
 	u32 stack;
 
+#ifdef PLATFORM_XBOX
+	serialPuts("ML enter\n");
+#endif
 	PD_DBGMARK(200);
 	func0f175f98();
 	PD_DBGMARK(201);
@@ -355,6 +370,16 @@ void mainLoop(void)
 
 	// Outer loop - this is infinite because ending is never changed
 	while (!ending) {
+#ifdef PLATFORM_XBOX
+		{
+			static u32 it = 0;
+			if (++it < 400u) {
+				char b[64];
+				sprintf(b, "mainLoop it %u stage %d\n", it, (int)g_StageNum);
+				serialPuts(b);
+			}
+		}
+#endif
 		PD_DBGMARK(203);
 		g_MainNumGfxTasks = 0;
 		g_MainGameLogicEnabled = true;
@@ -534,17 +559,38 @@ void mainLoop(void)
 				schedEndFrame(&g_Sched);
 				PD_DBGMARK(233);
 			}
+#ifdef PLATFORM_XBOX
+			else {
+				// The frame gate stopped passing; report the timer values so
+				// the stall can be attributed rather than guessed at.
+				static u32 spins = 0;
+				if ((++spins % 100000u) == 0u) {
+					char b[112];
+					sprintf(b, "STALL cyc=%d cnt=%u start=%d min=%d\n",
+					        (int)cycles, (unsigned)osGetCount(),
+					        (int)g_Vars.thisframestartt, (int)g_Vars.mininc60);
+					serialPuts(b);
+				}
+			}
+#endif
 			if (g_TickExtraSleep) {
 				sysSleep(EXTRA_SLEEP_TIME);
 			}
 		}
 
+		PD_DBGMARK(240);
 		lvStop();
+		PD_DBGMARK(241);
 		mempDisablePool(MEMPOOL_STAGE);
+		PD_DBGMARK(242);
 		mempDisablePool(MEMPOOL_7);
+		PD_DBGMARK(243);
 		filesStop(4);
+		PD_DBGMARK(244);
 		viBlack(true);
+		PD_DBGMARK(245);
 		pak0f116994();
+		PD_DBGMARK(246);
 
 		g_StageNum = g_MainChangeToStageNum;
 		g_MainChangeToStageNum = -1;

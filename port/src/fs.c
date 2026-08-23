@@ -18,6 +18,10 @@
 #include "platform.h"
 #include "utils.h"
 #include "fs.h"
+#ifdef PLATFORM_XBOX
+#include <windows.h>
+#endif
+
 #ifdef PLATFORM_WIN32
 #include <direct.h>
 #endif
@@ -127,6 +131,10 @@ const char *fsFullPath(const char *relPath)
 	return pathBuf;
 }
 
+#ifdef PLATFORM_XBOX
+static void xboxMakeDirs(const char *abs);
+#endif
+
 s32 fsInit(void)
 {
 #ifdef PLATFORM_XBOX
@@ -151,7 +159,18 @@ s32 fsInit(void)
 	strncpy(exeDir,  "D:",                      FS_MAXPATH);
 	strncpy(homeDir, "D:",                      FS_MAXPATH);
 	strncpy(baseDir, "D:",                      FS_MAXPATH);
+	// Saves live on E: (HDD partition 1). Nothing mounts it for us -- only D:
+	// is handled above -- so the save dir was unreachable and every EEPROM
+	// read/write failed with ENOENT.
+	if (!nxIsDriveMounted('E')) {
+		sysLogPrintf(LOG_NOTE, "mounting E: -> %s", "\\Device\\Harddisk0\\Partition1\\");
+		if (!nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\")) {
+			sysLogPrintf(LOG_ERROR, "FAILED to mount E:");
+		}
+	}
+
 	strncpy(saveDir, "E:\\TDATA\\PerfectDarkX", FS_MAXPATH);
+	xboxMakeDirs(saveDir);
 	sysLogPrintf(LOG_NOTE, "base dir: %s", baseDir);
 	sysLogPrintf(LOG_NOTE, "save dir: %s", saveDir);
 	return 0;
@@ -354,11 +373,38 @@ void fsFileFree(FILE *f)
 	fclose(f);
 }
 
+#ifdef PLATFORM_XBOX
+// E:\\ is writable but its directories do not exist on a fresh console, so
+// create every component. Without this the save dir is missing and every
+// EEPROM read/write fails with ENOENT.
+static void xboxMakeDirs(const char *abs)
+{
+	char tmp[FS_MAXPATH + 1];
+	strncpy(tmp, abs, FS_MAXPATH);
+	tmp[FS_MAXPATH] = '\0';
+
+	for (char *p = tmp; *p; ++p) {
+		if ((*p == '\\' || *p == '/') && p != tmp && *(p - 1) != ':') {
+			const char sep = *p;
+			*p = '\0';
+			CreateDirectoryA(tmp, NULL);
+			*p = sep;
+		}
+	}
+
+	CreateDirectoryA(tmp, NULL);
+}
+#endif
+
 s32 fsCreateDir(const char *path)
 {
 #ifdef PLATFORM_XBOX
-	(void)path;
-	return 0; // no mkdir needed; dirs are on read-only disc
+	// D: is the read-only disc, but saves live on E: and must be created.
+	const char *full = (strchr(path, ':') != NULL) ? path : fsFullPath(path);
+	if (CreateDirectoryA(full, NULL)) {
+		return 0;
+	}
+	return (GetLastError() == ERROR_ALREADY_EXISTS) ? 0 : -1;
 #elif defined(PLATFORM_WIN32)
 	return _mkdir(fsFullPath(path));
 #else

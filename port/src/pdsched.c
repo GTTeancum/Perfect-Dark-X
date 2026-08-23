@@ -25,6 +25,7 @@
 #include "audio.h"
 #include "input.h"
 #include "mixer.h"
+#include "system.h"
 
 /*
  * private typedefs and defines
@@ -245,6 +246,17 @@ void schedStartFrame(OSSched *sc)
 void schedAudioFrame(OSSched *sc)
 {
 	s32 i;
+
+#ifdef PLATFORM_XBOX
+	{
+		static bool reported;
+		if (!reported) {
+			sysLogPrintf(LOG_NOTE, "audio: scheduler active disabled=%d diffframe60=%d",
+					g_SndDisabled, g_Vars.diffframe60);
+			reported = true;
+		}
+	}
+#endif
 
 	if (!g_SndDisabled) {
 		for (i = 0; i < g_Vars.diffframe60; i++) {

@@ -45,9 +45,9 @@ bool rzipIs1173(void *buffer)
 	return (src[0] == 0x11 && src[1] == 0x73);
 }
 
-static inline s32 rzipInflate1172(z_stream *strm, u8 *src, void *dst)
+static inline s32 rzipInflate1172(z_stream *strm, u8 *src, u32 srcLen, void *dst)
 {
-	strm->avail_in = 0x2000;
+	strm->avail_in = srcLen ? srcLen : 0x2000;
 	strm->next_in = src;
 
 	do {
@@ -62,9 +62,12 @@ static inline s32 rzipInflate1172(z_stream *strm, u8 *src, void *dst)
 	return strm->total_out;
 }
 
-static inline s32 rzipInflate1173(z_stream *strm, u8 *src, void *dst, u32 dstLen)
+static inline s32 rzipInflate1173(z_stream *strm, u8 *src, u32 srcLen, void *dst, u32 dstLen)
 {
-	strm->avail_in = -1; // compressed size unknown
+	// Several legacy callers do not know the compressed length. File loading
+	// does, and must pass it: UINT_MAX lets inflate_fast read beyond an asset
+	// whose deflate stream ends exactly at the allocation boundary.
+	strm->avail_in = srcLen ? srcLen : (u32)-1;
 	strm->next_in = src;
 	strm->avail_out = dstLen;
 	strm->next_out = dst;
@@ -99,7 +102,7 @@ static inline s32 rzipInflate1173(z_stream *strm, u8 *src, void *dst, u32 dstLen
 	return strm->total_out;
 }
 
-s32 rzipInflate(void *srcp, void *dst, void *scratch)
+static s32 rzipInflateInternal(void *srcp, u32 srcLen, void *dst, void *scratch)
 {
 	s32 ret = 0;
 	u8 *src = srcp;
@@ -123,10 +126,12 @@ s32 rzipInflate(void *srcp, void *dst, void *scratch)
 	if (rzipIs1173(src)) {
 		// 1173, we know the uncompressed length
 		const u32 dstLen = ((u32)src[2] << 16) | ((u32)src[3] << 8) | (u32)src[4];
-		ret = rzipInflate1173(&strm, src + 5, dst, dstLen);
+		const u32 deflateLen = srcLen > 5 ? srcLen - 5 : 0;
+		ret = rzipInflate1173(&strm, src + 5, deflateLen, dst, dstLen);
 	} else if (rzipIs1172(src)) {
 		// 1172, uncompressed length unknown
-		ret = rzipInflate1172(&strm, src + 2, dst);
+		const u32 deflateLen = srcLen > 2 ? srcLen - 2 : 0;
+		ret = rzipInflate1172(&strm, src + 2, deflateLen, dst);
 	} else {
 		rmonPrintf("rzipInflate: input not in any known rare zip format\n");
 		ret = 0;
@@ -140,6 +145,16 @@ s32 rzipInflate(void *srcp, void *dst, void *scratch)
 	} else {
 		return 0;
 	}
+}
+
+s32 rzipInflate(void *src, void *dst, void *scratch)
+{
+	return rzipInflateInternal(src, 0, dst, scratch);
+}
+
+s32 rzipInflateSized(void *src, u32 srcLen, void *dst, void *scratch)
+{
+	return rzipInflateInternal(src, srcLen, dst, scratch);
 }
 
 u32 rzipInit(void)

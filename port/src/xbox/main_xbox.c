@@ -32,6 +32,7 @@
 #include "system.h"
 #include "utils.h"
 #include "debug_xbox.h"
+#include "serial_xbox.h"
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 
@@ -47,10 +48,12 @@ u32 g_OsMemSize    = 0;
 // expansion = 8 MB).  At exactly 8 MB the expansion pool is never created, yet
 // IS8MB mode (>4 MB) routes stage allocations to it -> mempGetNextStageAllocation
 // returns NULL -> corruption/crash in lvReset.  12 MB = 4 MB onboard + 8 MB
-// expansion stage pool, matching the desktop default's >8 MB layout while fitting
-// the 64 MB Xbox budget (32 MB ROM resident + ~15 MB free after the texture fix).
+// expansion stage pool. With the ROM no longer resident (loose files) there is
+// ~32 MB free, so use 16 MB = 8 MB onboard + 8 MB expansion, matching the
+// desktop default exactly. At 12 MB the onboard pool is only 4 MB, which
+// starves stage allocation and crashes in lvReset as described above.
 // NOTE: Game.MemorySize in pd.ini overrides this; keep them in sync.
-s32 g_OsMemSizeMb  = 12;
+s32 g_OsMemSizeMb  = 16;
 u8  g_Is4Mb        = 0;
 s8  g_Resetting    = 0;
 
@@ -135,6 +138,7 @@ static void cleanup(void)
 #define BOOT_PRINT(msg) do { \
     debugClearScreen(); \
     debugPrint("PD-X: " msg "\n"); \
+    serialPuts("PD-X: " msg "\n"); \
 } while(0)
 
 void __cdecl main(void)
@@ -142,6 +146,9 @@ void __cdecl main(void)
     // Initialise a HAL framebuffer up front so debugPrint/BOOT_PRINT and any
     // early sysFatalError message are actually visible.  pbkit (videoInit)
     // reinitialises the display later; this is just for boot diagnostics.
+    serialInit();
+    serialPuts("\n=== PD-X boot ===\n");
+
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
 
     BOOT_PRINT("entry");

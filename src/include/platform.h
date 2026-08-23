@@ -94,13 +94,24 @@
 	#define PD_LEPTR(x) PD_LE32(x)
 #endif
 
-// Lightweight post-mortem breadcrumb: writes a marker value into a global that
-// can be read back from the XEMU monitor (via the .map address of g_DbgMark)
-// after a crash/halt.  No I/O, no rendering — safe to call from anywhere,
-// including hot paths and right before suspected-crashing calls.
+// Optional crash-bisection trace. This is deliberately disabled in normal
+// builds: the instrumented game loop crosses many marks per frame, and COM1
+// port I/O is expensive under XEMU. Enable PD_XBOX_TRACE_MARKS only for a
+// dedicated diagnostic build.
 #ifdef PLATFORM_XBOX
 	extern volatile unsigned int g_DbgMark;
-	#define PD_DBGMARK(n) (g_DbgMark = (unsigned int)(n))
+	#ifdef PD_XBOX_TRACE_MARKS
+	#ifdef __cplusplus
+	extern "C" {
+	#endif
+	void serialMark(unsigned int n);
+	#ifdef __cplusplus
+	}
+	#endif
+	#define PD_DBGMARK(n) serialMark((unsigned int)(n))
+	#else
+	#define PD_DBGMARK(n) ((void)0)
+	#endif
 #else
 	#define PD_DBGMARK(n) ((void)0)
 #endif

@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+
+# Extracts a ROM into the loose-file layout that port/src/romdata.c already
+# understands: <out>/files/<name>, <out>/segs/<name> and <out>/filenames.lst.
+#
+# With all three present the port runs with no ROM at all -- romdataInitFiles()
+# falls back to filenames.lst, romdataFileLoad() finds files/<name> and
+# romdataInitSegment() finds segs/<name>.
+#
+# File entries are written exactly as they appear in the ROM (still rzip'd where
+# the ROM had them rzip'd). Do not pre-inflate them: fileGetInflatedSize() reads
+# the rzip header to size its allocation.
+#
+# Usage:  tools/extract-loose pd.ntsc-final.z64 [--romid ntsc-final] [--out build/loose]
+
+import argparse, os, re, struct, sys, zlib
+
+# offsets of the file table (within the inflated data segment) and of the data
+# segment itself (within the ROM); mirrors the #defines in port/src/romdata.c
+ROMIDS = {
+    'ntsc-final': {'files_ofs': 0x28080, 'data_ofs': 0x39850, 'col': 0},
+    'pal-final':  {'files_ofs': 0x28910, 'data_ofs': 0x39850, 'col': 1},
+    'jpn-final':  {'files_ofs': 0x28800, 'data_ofs': 0x39850, 'col': 2},
+}
+
+SEG_RE = re.compile(
+    r'ROMSEG_DECL_SEG\(\s*(\w+)\s*,\s*'
+    r'(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*'
+    r'(0x[0-9a-fA-F]+)\s*,')
+
+
+def parse_segments(romdata_c, col):
+    """Pull the segment table out of romdata.c so it can't drift out of sync."""
+    src = open(romdata_c, 'r', encoding='utf-8', errors='replace').read()
+    start = src.index('#define ROMSEG_LIST')
+    end = src.index('#undef ROMSEG_DECL_SEG', start)
+    segs = []
+    for m in SEG_RE.finditer(src[start:end]):
+        name = m.group(1)
+        ofs = int(m.group(2 + col), 16)
+        size = int(m.group(5), 16)
+        segs.append({'name': name, 'ofs': ofs, 'size': size})
+    return segs
+
+
+def rzip_inflate(buf):
+    """Returns inflated bytes, or None if the buffer is not rzip-compressed."""
+    if len(buf) < 5 or buf[0:2] != b'\x11\x73':
+        return None
+    try:
+        return zlib.decompress(buf[5:], wbits=-15)
+    except zlib.error:
+        return zlib.decompressobj(-15).decompress(buf[5:])
+
+
+def write(path, data):
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
+    with open(path, 'wb') as fd:
+        fd.write(data)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('rom')
+    ap.add_argument('--romid', default='ntsc-final', choices=sorted(ROMIDS))
+    ap.add_argument('--out', default='build/loose')
+    ap.add_argument('--romdata', default='port/src/romdata.c')
+    args = ap.parse_args()
+
+    cfg = ROMIDS[args.romid]
+    rom = open(args.rom, 'rb').read()
+    print('rom            : %s (%d bytes)' % (args.rom, len(rom)))
+
+    dataseg = rzip_inflate(rom[cfg['data_ofs']:])
+    if dataseg is None:
+        sys.exit('data segment at %#x is not rzip-compressed -- wrong romid?' % cfg['data_ofs'])
+    print('data segment   : %d bytes inflated' % len(dataseg))
+
+    # --- file offset table (index 0 is a sentinel, the last entry is the name table)
+    offs = [0]
+    while True:
+        v = struct.unpack_from('>I', dataseg, cfg['files_ofs'] + 4 * len(offs))[0]
+        if v == 0:
+            break
+        offs.append(v)
+    nametab = offs[-1]
+    numfiles = len(offs) - 1
+
+    names = {}
+    i = 1
+    while True:
+        v = struct.unpack_from('>I', rom, nametab + 4 * i)[0]
+        if v == 0:
+            break
+        end = rom.index(b'\0', nametab + v)
+        names[i] = rom[nametab + v:end].decode('ascii', 'replace')
+        i += 1
+
+    # --- files/, written byte-for-byte as the ROM holds them
+    written = skipped = total = 0
+    lst = []
+    for i in range(1, numfiles):
+        name = names.get(i)
+        a, b = offs[i], offs[i + 1]
+        if not name:
+            lst.append('_unused_%04d' % i)   # keep filenames.lst index-aligned
+            skipped += 1
+            continue
+        lst.append(name)
+        if b <= a or b > len(rom):
+            skipped += 1
+            continue
+        data = rom[a:b]
+        write(os.path.join(args.out, 'files', name), data)
+        written += 1
+        total += len(data)
+
+    # romdataLoadExternalFileList() splits on whitespace, so one name per line
+    write(os.path.join(args.out, 'filenames.lst'), ('\n'.join(lst) + '\n').encode('ascii'))
+    print('files          : %d written, %d skipped, %s' % (written, skipped, human(total)))
+
+    # --- segs/, sizes auto-calculated from the next segment when declared 0
+    segs = parse_segments(args.romdata, cfg['col'])
+    live = [s for s in segs if s['ofs']]
+    segtotal = segcount = 0
+    for n, s in enumerate(live):
+        size = s['size']
+        if not size:
+            size = (live[n + 1]['ofs'] if n + 1 < len(live) else len(rom)) - s['ofs']
+        write(os.path.join(args.out, 'segs', s['name']), rom[s['ofs']:s['ofs'] + size])
+        segtotal += size
+        segcount += 1
+    print('segs           : %d written (%d unused in this rom), %s'
+          % (segcount, len(segs) - len(live), human(segtotal)))
+    print('total on disk  : %s  ->  %s' % (human(total + segtotal), args.out))
+
+
+def human(n):
+    return '%.1f MB' % (n / 1048576.0)
+
+
+if __name__ == '__main__':
+    main()

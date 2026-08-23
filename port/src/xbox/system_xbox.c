@@ -16,6 +16,7 @@ static inline void xboxMkdir(const char *path) { (void)path; }
 #include <PR/ultratypes.h>
 #include "platform.h"
 #include "system.h"
+#include "serial_xbox.h"
 
 // ── Timing ───────────────────────────────────────────────────────────────────
 
@@ -122,6 +123,9 @@ void sysLogPrintf(s32 level, const char *fmt, ...)
 
     // Also print to NXDK debug output (visible via serial / debugger)
     debugPrint("%s%s\n", prefix[level], msg);
+    serialPuts(prefix[level]);
+    serialPuts(msg);
+    serialPutc('\n');
 }
 
 void sysFatalError(const char *fmt, ...)

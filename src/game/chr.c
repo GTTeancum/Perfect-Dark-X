@@ -6493,6 +6493,18 @@ Gfx *chrRenderCloak(Gfx *gdl, struct prop *chrprop, struct prop *thisprop)
 
 Gfx *chrRenderShield(Gfx *gdl, struct chrdata *chr, u32 alpha)
 {
+#if defined(PLATFORM_XBOX) && defined(PD_XBOX_RENDER_QUALIFY_EFFECTS)
+	// Keep an on-screen character in the cloak transition for renderer
+	// qualification. This continuously exercises the game's real 16x16
+	// framebuffer-copy, framebuffer-texture and shield-component draw path.
+	// The CMake option is default-off and is never present in release images.
+	if (chr->prop && chr->prop->type == PROPTYPE_CHR
+			&& (chr->prop->flags & PROPFLAG_ONTHISSCREENTHISTICK)) {
+		chr->cloakfadefrac = 128;
+		chr->cloakfadefinished = false;
+	}
+#endif
+
 	if (chrGetShield(chr) > 0 && g_Vars.lvupdate240 > 0) {
 		chr->cmcount++;
 
