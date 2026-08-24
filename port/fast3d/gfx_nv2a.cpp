@@ -618,6 +618,14 @@ static void nv2a_upload_texture(const uint8_t *rgba32_buf,
 
     if (!t.vram) {
         sysLogPrintf(LOG_ERROR, "NV2A: MmAllocateContiguousMemory failed (%ux%u)", width, height);
+        t.used = false;
+        t.width = 0;
+        t.height = 0;
+        t.pitch = 0;
+        t.fmt_word = 0;
+        g_active_texture[tile] = -1;
+        nv2a_disable_texture(tile);
+        g_texture_program_valid = false;
         return;
     }
 
@@ -1385,6 +1393,12 @@ static void nv2a_set_sampler_parameters(int sampler, bool linear_filter,
 static void nv2a_delete_texture(uint32_t texID)
 {
     if (texID == 0 || texID >= MAX_TEXTURES) return;
+    for (int tile = 0; tile < TEXTURE_TILE_COUNT; ++tile) {
+        if (g_active_texture[tile] == (int)texID) {
+            nv2a_disable_texture(tile);
+            g_active_texture[tile] = -1;
+        }
+    }
     NV2ATexture &t = g_textures[texID];
     if (t.vram) {
         MmFreeContiguousMemory(t.vram);

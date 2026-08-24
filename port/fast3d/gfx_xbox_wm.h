@@ -9,6 +9,11 @@ extern "C" {
 
 extern struct GfxWindowManagerAPI gfx_xbox_wm;
 
+float gfx_xbox_wm_get_display_aspect(void);
+bool gfx_xbox_wm_is_widescreen(void);
+bool gfx_xbox_wm_is_progressive(void);
+bool gfx_xbox_wm_is_720p(void);
+
 #ifdef __cplusplus
 }
 #endif

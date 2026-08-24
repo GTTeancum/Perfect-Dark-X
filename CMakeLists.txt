@@ -193,6 +193,11 @@ if(XBOX)
     add_compile_options(-Og -fno-inline-functions)
   else()
     add_compile_options(-O2)
+    # propsTick mutates intrusive prop lists while iterating them.  GCC's O2
+    # build is currently unstable on the Xbox target even without external
+    # textures; keep this one translation unit conservative while the rest of
+    # the release build retains the performance-critical O2 setting.
+    set_source_files_properties(src/game/proptick.c PROPERTIES COMPILE_OPTIONS "-O1")
   endif()
 elseif(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug"))
   add_compile_options(-Og)

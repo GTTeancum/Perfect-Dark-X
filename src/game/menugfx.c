@@ -125,6 +125,9 @@ void menugfxCreateBlur(void)
 
 	g_ScaleX = 1;
 #else
+	if (!videoFramebuffersSupported()) {
+		return;
+	}
 	if (g_MenuBlurFb < 0) {
 		g_MenuBlurFb = videoCreateFramebuffer(BLURIMG_WIDTH, BLURIMG_HEIGHT, true, false);
 		g_MenuScreenFb = videoCreateFramebuffer(0, 0, false, true);
@@ -149,6 +152,12 @@ Gfx *menugfxRenderBgBlur(Gfx *gdl, u32 colour, s16 arg2, s16 arg3)
 	{
 		return menugfxRenderGradient(gdl, 0, 0, viGetWidth(), viGetHeight(), 0xff, 0xff, 0xff);
 	}
+
+#ifndef PLATFORM_N64
+	if (!videoFramebuffersSupported()) {
+		return menugfxRenderGradient(gdl, 0, 0, viGetWidth(), viGetHeight(), 0xff, 0xff, 0xff);
+	}
+#endif
 
 #ifndef PLATFORM_N64
 	width = viGetWidth();

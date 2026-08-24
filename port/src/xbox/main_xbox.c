@@ -19,6 +19,7 @@
 #include <hal/video.h>
 
 #include "lib/main.h"
+#include "game/title.h"
 #include "bss.h"
 #include "data.h"
 
@@ -73,6 +74,8 @@ s32 g_TickRateDiv    = 1;
 s32 g_TickExtraSleep = 1;
 s32 g_SkipIntro      = 0;
 s32 g_FileAutoSelect = -1;
+static s32 g_BootStage = STAGE_TITLE;
+static s32 g_BootPlayers = 1;
 
 extern s32 g_StageNum;
 
@@ -100,6 +103,15 @@ void bootCreateSched(void)
 
 static void gameInit(void)
 {
+#ifdef PLATFORM_XBOX
+    if (videoIs720p() && g_OsMemSizeMb > 14) {
+        // Native 720p's four full-resolution pbkit surfaces cost roughly
+        // 14 MiB. Keep the expansion pool at its required 8 MiB while
+        // returning 2 MiB to the bounded texture cache and runtime services.
+        g_OsMemSizeMb = 14;
+        serialPuts("PD-X: 720p tier clamped game heap to 14 MB\n");
+    }
+#endif
     osMemSize = g_OsMemSizeMb * 1024 * 1024;
 
     for (s32 i = 0; i < MAX_PLAYERS; ++i) {
@@ -173,6 +185,12 @@ void __cdecl main(void)
 
     BOOT_PRINT("configInit...");
     configInit();
+    // Qualification discs may provide a read-only boot override without
+    // mutating or being masked by the user's persistent E: configuration.
+    if (fsFileSize("$E/pdx_boot.ini") > 0) {
+        configLoad("$E/pdx_boot.ini");
+        serialPuts("PD-X: qualification boot override loaded\n");
+    }
     BOOT_PRINT("configInit OK");
     dbgPhase(DBG_PHASE_CFG_INIT, "configInit OK");
 
@@ -244,7 +262,15 @@ void __cdecl main(void)
     sysLogPrintf(LOG_NOTE, "memp heap at %p (%u MB)", g_MempHeap, g_MempHeapSize / (1024*1024));
     sysLogPrintf(LOG_NOTE, "rom  file at %p (%u MB)", g_RomFile,  g_RomFileSize  / (1024*1024));
 
-    g_StageNum = STAGE_TITLE;
+    g_StageNum = g_BootStage;
+    if (g_StageNum < STAGE_TITLE && g_BootPlayers >= 2) {
+        char bootline[80];
+        setNumPlayers(g_BootPlayers);
+        snprintf(bootline, sizeof(bootline),
+                 "PD-X: qualification boot players=%d stage=%d\n",
+                 g_BootPlayers, g_StageNum);
+        serialPuts(bootline);
+    }
 
     dbgPhase(DBG_PHASE_GAME_INIT, "gameInit+heap OK");
     dbgPhase(DBG_PHASE_SCHED, "bootCreateSched OK");
@@ -270,6 +296,9 @@ PD_CONSTRUCTOR static void gameConfigInit(void)
     configRegisterInt("Game.TickRateDivisor",        &g_TickRateDiv,   0,   10);
     configRegisterInt("Game.ExtraSleep",             &g_TickExtraSleep, 0,  1);
     configRegisterInt("Game.SkipIntro",              &g_SkipIntro,     0,   1);
+    configRegisterInt("Game.BootStage",              &g_BootStage,     1,   STAGE_TITLE);
+    configRegisterInt("Game.BootPlayers",            &g_BootPlayers,   1,   MAX_PLAYERS);
+    configRegisterInt("Game.Profile",                &g_FileAutoSelect, -1,  3);
     configRegisterInt("Game.DisableMpDeathMusic",    &g_MusicDisableMpDeath, 0, 1);
     configRegisterInt("Game.GEMuzzleFlashes",        &g_BgunGeMuzzleFlashes, 0, 1);
     configRegisterInt("Game.MaxExplosions",          &g_MaxExplosions, 6,   96);

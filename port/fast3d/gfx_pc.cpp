@@ -33,6 +33,15 @@
 #include "gfx_rendering_api.h"
 #include "gfx_screen_config.h"
 
+#ifdef PLATFORM_XBOX
+extern "C" {
+#include <xboxkrnl/xboxkrnl.h>
+#include "../src/xbox/ext_texture_xbox.h"
+#include "../src/xbox/serial_xbox.h"
+}
+#include "gfx_xbox_wm.h"
+#endif
+
 uintptr_t gfxFramebuffer;
 
 #define ALIGN(x, a) (((x) + (a - 1)) & ~(a - 1))
@@ -59,7 +68,15 @@ uintptr_t gfxFramebuffer;
 #define MAX_VERTICES 128
 #define MAX_VERTEX_COLORS 64
 
+#ifdef PLATFORM_XBOX
+// Keep the general cache bounded, then apply a stricter byte budget to the
+// larger external diffuse textures. N64 originals are tiny by comparison.
+#define TEXTURE_CACHE_MAX_SIZE 128
+#define EXTERNAL_TEXTURE_CACHE_MAX_BYTES (4u * 1024u * 1024u)
+#define EXTERNAL_TEXTURE_CACHE_720P_BYTES (1u * 1024u * 1024u)
+#else
 #define TEXTURE_CACHE_MAX_SIZE 1024
+#endif
 
 #define C0(pos, width) ((cmd->words.w0 >> (pos)) & ((1U << width) - 1))
 #define C1(pos, width) ((cmd->words.w1 >> (pos)) & ((1U << width) - 1))
@@ -86,7 +103,10 @@ struct LoadedVertex {
 static struct {
     TextureCacheMap map;
     std::list<TextureCacheMapIter> lru;
-    std::vector<uint32_t> free_texture_ids;
+    size_t external_bytes;
+    size_t external_peak_bytes;
+    uint32_t evictions;
+    uint32_t reported_peak_mib;
 } gfx_texture_cache;
 
 struct ColorCombiner {
@@ -150,6 +170,7 @@ struct LoadedTexture {
     uint32_t full_image_line_size_bytes;
     uint32_t line_size_bytes;
     uint32_t tex_flags;
+    uint32_t external_id;
     struct RawTexMetadata raw_tex_metadata;
 };
 
@@ -162,6 +183,8 @@ static struct RDP {
         uint8_t siz;
         uint32_t width;
         uint32_t tex_flags;
+        uint32_t external_id;
+        bool external_valid;
         struct RawTexMetadata raw_tex_metadata;
     } texture_to_load;
     struct {
@@ -521,18 +544,86 @@ static struct ColorCombiner* gfx_lookup_or_create_color_combiner(const ColorComb
     return &prev_combiner->second;
 }
 
+static void gfx_texture_cache_report_peak() {
+#ifdef PLATFORM_XBOX
+    const uint32_t peak_mib = (uint32_t)((gfx_texture_cache.external_peak_bytes
+        + 1024u * 1024u - 1u) / (1024u * 1024u));
+    if (peak_mib == 0 || peak_mib <= gfx_texture_cache.reported_peak_mib) {
+        return;
+    }
+    gfx_texture_cache.reported_peak_mib = peak_mib;
+
+    MM_STATISTICS memory = {};
+    memory.Length = sizeof(memory);
+    MmQueryStatistics(&memory);
+
+    char message[160];
+    snprintf(message, sizeof(message),
+        "PDTX: cache=%luK peak=%luK entries=%lu evict=%lu avail=%luK\n",
+        (unsigned long)(gfx_texture_cache.external_bytes / 1024u),
+        (unsigned long)(gfx_texture_cache.external_peak_bytes / 1024u),
+        (unsigned long)gfx_texture_cache.map.size(),
+        (unsigned long)gfx_texture_cache.evictions,
+        (unsigned long)(memory.AvailablePages * 4u));
+    serialPuts(message);
+#endif
+}
+
+static uint32_t gfx_texture_cache_release(TextureCacheMap::iterator it,
+                                          bool delete_backend) {
+    TextureCacheNode* evicted = &*it;
+    const uint32_t texture_id = it->second.texture_id;
+    for (int tile = 0; tile < 2; ++tile) {
+        if (rendering_state.textures[tile] == evicted) {
+            rendering_state.textures[tile] = nullptr;
+            rdp.textures_changed[tile] = true;
+        }
+    }
+
+    if (it->second.texture_bytes <= gfx_texture_cache.external_bytes) {
+        gfx_texture_cache.external_bytes -= it->second.texture_bytes;
+    } else {
+        gfx_texture_cache.external_bytes = 0;
+    }
+    if (delete_backend) {
+        gfx_rapi->delete_texture(texture_id);
+    }
+    gfx_texture_cache.lru.erase(it->second.lru_location);
+    gfx_texture_cache.map.erase(it);
+    ++gfx_texture_cache.evictions;
+#ifdef PLATFORM_XBOX
+    // Report exponentially so a healthy cache stays quiet while a thrashing
+    // cache leaves enough evidence in an unattended qualification log.
+    if (gfx_texture_cache.evictions >= 64
+            && (gfx_texture_cache.evictions & (gfx_texture_cache.evictions - 1)) == 0) {
+        MM_STATISTICS memory = {};
+        memory.Length = sizeof(memory);
+        MmQueryStatistics(&memory);
+        char message[144];
+        snprintf(message, sizeof(message),
+            "PDTX: evict=%lu cache=%luK entries=%lu avail=%luK\n",
+            (unsigned long)gfx_texture_cache.evictions,
+            (unsigned long)(gfx_texture_cache.external_bytes / 1024u),
+            (unsigned long)gfx_texture_cache.map.size(),
+            (unsigned long)(memory.AvailablePages * 4u));
+        serialPuts(message);
+    }
+#endif
+    return texture_id;
+}
+
 void gfx_texture_cache_clear() {
     gfx_flush();
-    for (const auto& entry : gfx_texture_cache.map) {
-        gfx_texture_cache.free_texture_ids.push_back(entry.second.texture_id);
+    while (!gfx_texture_cache.lru.empty()) {
+        gfx_texture_cache_release(gfx_texture_cache.lru.front().it, true);
     }
-    gfx_texture_cache.map.clear();
-    gfx_texture_cache.lru.clear();
+    gfx_texture_cache.external_bytes = 0;
     rdp.textures_changed[0] = rdp.textures_changed[1] = true;
     memset(rendering_state.textures, 0, sizeof(rendering_state.textures));
 }
 
-static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key) {
+static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key,
+                                     size_t texture_bytes = 0) {
     TextureCacheMap::iterator it = gfx_texture_cache.map.find(key);
     TextureCacheNode** n = &rendering_state.textures[i];
 
@@ -544,26 +635,61 @@ static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key) {
         return true;
     }
 
-    if (gfx_texture_cache.map.size() >= TEXTURE_CACHE_MAX_SIZE) {
-        // Remove the texture that was least recently used
-        it = gfx_texture_cache.lru.front().it;
-        gfx_texture_cache.free_texture_ids.push_back(it->second.texture_id);
-        gfx_texture_cache.map.erase(it);
-        gfx_texture_cache.lru.pop_front();
+    bool flushed = false;
+    uint32_t recycled_texture_id = 0;
+    while (!gfx_texture_cache.lru.empty()) {
+        const size_t entry_limit = TEXTURE_CACHE_MAX_SIZE;
+        bool over_entry_limit = gfx_texture_cache.map.size() >= entry_limit;
+        bool over_byte_limit = false;
+#ifdef PLATFORM_XBOX
+        const size_t external_byte_limit = gfx_xbox_wm_is_720p()
+            ? EXTERNAL_TEXTURE_CACHE_720P_BYTES
+            : EXTERNAL_TEXTURE_CACHE_MAX_BYTES;
+        over_byte_limit = texture_bytes != 0
+            && gfx_texture_cache.external_bytes + texture_bytes
+                > external_byte_limit;
+#endif
+        if (!over_entry_limit && !over_byte_limit) {
+            break;
+        }
+
+        auto victim = gfx_texture_cache.lru.begin();
+        if (over_byte_limit) {
+            while (victim != gfx_texture_cache.lru.end()
+                    && victim->it->second.texture_bytes == 0) {
+                ++victim;
+            }
+            if (victim == gfx_texture_cache.lru.end()) {
+                break;
+            }
+        }
+
+        if (!flushed) {
+            // Buffered triangles may still reference the allocation.
+            gfx_flush();
+            flushed = true;
+        }
+        uint32_t victim_id = victim->it->second.texture_id;
+        if (recycled_texture_id == 0) {
+            recycled_texture_id = victim_id;
+            gfx_texture_cache_release(victim->it, false);
+        } else {
+            gfx_texture_cache_release(victim->it, true);
+        }
     }
 
-    uint32_t texture_id;
-    if (!gfx_texture_cache.free_texture_ids.empty()) {
-        texture_id = gfx_texture_cache.free_texture_ids.back();
-        gfx_texture_cache.free_texture_ids.pop_back();
-    } else {
-        texture_id = gfx_rapi->new_texture();
-    }
-
+    uint32_t texture_id = recycled_texture_id != 0
+        ? recycled_texture_id : gfx_rapi->new_texture();
     it = gfx_texture_cache.map.insert(std::make_pair(key, TextureCacheValue())).first;
     TextureCacheNode* node = &*it;
     node->second.texture_id = texture_id;
+    node->second.texture_bytes = texture_bytes;
     node->second.lru_location = gfx_texture_cache.lru.insert(gfx_texture_cache.lru.end(), { it });
+    gfx_texture_cache.external_bytes += texture_bytes;
+    if (gfx_texture_cache.external_bytes > gfx_texture_cache.external_peak_bytes) {
+        gfx_texture_cache.external_peak_bytes = gfx_texture_cache.external_bytes;
+        gfx_texture_cache_report_peak();
+    }
 
     gfx_rapi->select_texture(i, texture_id, false);
     gfx_rapi->set_sampler_parameters(i, false, 0, 0, rdp.tex_lod);
@@ -588,7 +714,10 @@ void gfx_texture_cache_delete(const uint8_t* orig_addr) {
         for (auto it = gfx_texture_cache.map.begin(bucket); it != gfx_texture_cache.map.end(bucket); ++it) {
             if (it->first.texture_addr == orig_addr) {
                 gfx_texture_cache.lru.erase(it->second.lru_location);
-                gfx_texture_cache.free_texture_ids.push_back(it->second.texture_id);
+                if (it->second.texture_bytes <= gfx_texture_cache.external_bytes) {
+                    gfx_texture_cache.external_bytes -= it->second.texture_bytes;
+                }
+                gfx_rapi->delete_texture(it->second.texture_id);
                 gfx_texture_cache.map.erase(it->first);
                 again = true;
                 break;
@@ -615,7 +744,10 @@ void gfx_texture_cache_delete_range(const uint8_t* start, const uint8_t* end) {
     for (auto it = gfx_texture_cache.map.begin(); it != gfx_texture_cache.map.end(); ) {
         if (it->first.texture_addr >= start && it->first.texture_addr < end) {
             gfx_texture_cache.lru.erase(it->second.lru_location);
-            gfx_texture_cache.free_texture_ids.push_back(it->second.texture_id);
+            if (it->second.texture_bytes <= gfx_texture_cache.external_bytes) {
+                gfx_texture_cache.external_bytes -= it->second.texture_bytes;
+            }
+            gfx_rapi->delete_texture(it->second.texture_id);
             it = gfx_texture_cache.map.erase(it);
         } else {
             ++it;
@@ -909,15 +1041,47 @@ static void import_texture(int i, int tile, bool importReplacement) {
     SUPPORT_CHECK(orig_addr);
 
     TextureCacheKey key;
-    if (fmt == G_IM_FMT_CI) {
-        key = { orig_addr, { rdp.palette_addrs[0], rdp.palette_addrs[1] }, fmt, siz, palette_index };
+    bool use_external = false;
+    uint32_t external_width = 0;
+    uint32_t external_height = 0;
+    size_t external_bytes = 0;
+#ifdef PLATFORM_XBOX
+    use_external = loaded_texture.external_id != UINT32_MAX
+        && xboxExtTextureGetInfo(loaded_texture.external_id,
+            &external_width, &external_height);
+    if (use_external) {
+        // Match gfx_nv2a's 64-byte row-pitch alignment exactly.
+        external_bytes = ALIGN((size_t)external_width * 4u, 64u)
+            * external_height;
+    }
+#endif
+    if (use_external) {
+        key = { nullptr, {}, 0, 0, 0, loaded_texture.external_id };
+    } else if (fmt == G_IM_FMT_CI) {
+        key = { orig_addr, { rdp.palette_addrs[0], rdp.palette_addrs[1] }, fmt, siz, palette_index, UINT32_MAX };
     } else {
-        key = { orig_addr, {}, fmt, siz, palette_index };
+        key = { orig_addr, {}, fmt, siz, palette_index, UINT32_MAX };
     }
 
-    if (gfx_texture_cache_lookup(i, key)) {
+    if (gfx_texture_cache_lookup(i, key, external_bytes)) {
         return;
     }
+
+#ifdef PLATFORM_XBOX
+    if (use_external) {
+        uint32_t width = external_width;
+        uint32_t height = external_height;
+        uint8_t *pixels = xboxExtTextureLoad(loaded_texture.external_id, &width, &height);
+        if (pixels) {
+            gfx_rapi->upload_texture(pixels, width, height, false);
+            xboxExtTextureFree(pixels);
+            return;
+        }
+        sysLogPrintf(LOG_WARNING,
+            "texture pack: falling back to stock texture %04lx after load failure",
+            (unsigned long)loaded_texture.external_id);
+    }
+#endif
 
     if (fmt == G_IM_FMT_RGBA) {
         if (siz == G_IM_SIZ_16b) {
@@ -1807,6 +1971,11 @@ static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t wi
     rdp.texture_to_load.tex_flags = tex_flags;
 }
 
+static void gfx_dp_set_texture_info(uint8_t type, uint16_t id, uint32_t texture_id) {
+    rdp.texture_to_load.external_valid = type == G_TEXTYPE_GENERAL && id == 0;
+    rdp.texture_to_load.external_id = texture_id;
+}
+
 static void gfx_dp_set_tile(uint8_t fmt, uint32_t siz, uint32_t line, uint32_t tmem, uint8_t tile, uint32_t palette,
                             uint32_t cmt, uint32_t maskt, uint32_t shiftt, uint32_t cms, uint32_t masks,
                             uint32_t shifts) {
@@ -1914,6 +2083,9 @@ static void gfx_dp_load_block(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t
     loaded_texture.tex_flags = rdp.texture_to_load.tex_flags;
     loaded_texture.raw_tex_metadata = rdp.texture_to_load.raw_tex_metadata;
     loaded_texture.addr = rdp.texture_to_load.addr;
+    loaded_texture.external_id = rdp.texture_to_load.external_valid
+        ? rdp.texture_to_load.external_id : UINT32_MAX;
+    rdp.texture_to_load.external_valid = false;
 
     rdp.textures_changed[0] = rdp.textures_changed[1] = true;
 }
@@ -1954,6 +2126,9 @@ static void gfx_dp_load_tile(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t 
     loaded_texture.tex_flags = rdp.texture_to_load.tex_flags;
     loaded_texture.raw_tex_metadata = rdp.texture_to_load.raw_tex_metadata;
     loaded_texture.addr = rdp.texture_to_load.addr + start_offset_bytes;
+    loaded_texture.external_id = rdp.texture_to_load.external_valid
+        ? rdp.texture_to_load.external_id : UINT32_MAX;
+    rdp.texture_to_load.external_valid = false;
 
     rdp.texture_tile[tile].uls = uls;
     rdp.texture_tile[tile].ult = ult;
@@ -2378,6 +2553,10 @@ static void gfx_run_dl(Gfx* cmd) {
                 gfx_dp_set_texture_image(C0(21, 3), C0(19, 2), C0(0, 10), 0, seg_addr(cmd->words.w1));
                 break;
             }
+            case G_SETTEXINFO_EXT: {
+                gfx_dp_set_texture_info(C0(0, 8), C1(20, 12), C1(0, 20));
+                break;
+            }
             case G_SETTIMG_FB_EXT:
                 gfx_flush();
                 gfx_rapi->select_texture_fb(cmd->words.w1);
@@ -2575,10 +2754,20 @@ extern "C" void gfx_init(const GfxInitSettings *settings) {
     gfx_rapi = settings->rapi;
     gfx_wapi->init(&settings->window_settings);
     gfx_rapi->init();
-    gfx_rapi->update_framebuffer_parameters(0, settings->window_settings.width, settings->window_settings.height, 1, false, true, true, true);
+    uint32_t initial_width = settings->window_settings.width;
+    uint32_t initial_height = settings->window_settings.height;
+    int32_t initial_x = settings->window_settings.x;
+    int32_t initial_y = settings->window_settings.y;
+    gfx_wapi->get_dimensions(&initial_width, &initial_height, &initial_x, &initial_y);
+    gfx_rapi->update_framebuffer_parameters(0, initial_width, initial_height, 1, false, true, true, true);
     gfx_current_dimensions.internal_mul = 1;
-    gfx_current_game_window_viewport.width = gfx_current_dimensions.width = settings->window_settings.width;
-    gfx_current_game_window_viewport.height = gfx_current_dimensions.height = settings->window_settings.height;
+    gfx_current_game_window_viewport.width = gfx_current_dimensions.width = initial_width;
+    gfx_current_game_window_viewport.height = gfx_current_dimensions.height = initial_height;
+    gfx_current_dimensions.aspect_ratio = initial_height
+        ? (float)initial_width / (float)initial_height : 1.0f;
+#ifdef PLATFORM_XBOX
+    gfx_current_dimensions.aspect_ratio = gfx_xbox_wm_get_display_aspect();
+#endif
     game_framebuffer = gfx_rapi->create_framebuffer();
     game_framebuffer_msaa_resolved = gfx_rapi->create_framebuffer();
 
@@ -2607,6 +2796,9 @@ extern "C" void gfx_destroy(void) {
 
     // Texture cache and loaded textures store references to Resources which need to be unreferenced.
     gfx_texture_cache_clear();
+#ifdef PLATFORM_XBOX
+    xboxExtTextureShutdown();
+#endif
 }
 
 extern "C" struct GfxRenderingAPI* gfx_get_current_rendering_api(void) {
@@ -2624,6 +2816,12 @@ extern "C" void gfx_start_frame(void) {
     }
 
     gfx_current_window_dimensions.aspect_ratio = (float)gfx_current_window_dimensions.width / gfx_current_window_dimensions.height;
+#ifdef PLATFORM_XBOX
+    // A 640x480 Xbox framebuffer can be presented anamorphically at 16:9.
+    // Keep physical dimensions for allocation/rasterization, but expose the
+    // display aspect to fast3d so its existing widescreen path produces Hor+.
+    gfx_current_window_dimensions.aspect_ratio = gfx_xbox_wm_get_display_aspect();
+#endif
 
     gfx_current_dimensions = gfx_current_window_dimensions;
 

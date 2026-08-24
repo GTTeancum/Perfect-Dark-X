@@ -31,6 +31,9 @@ s32 videoGetNativeHeight(void);
 s32 videoGetWidth(void);
 s32 videoGetHeight(void);
 f32 videoGetAspect(void);
+#ifdef PLATFORM_XBOX
+s32 videoIs720p(void);
+#endif
 s32 videoGetFullscreen(void);
 s32 videoGetFullscreenMode(void);
 s32 videoGetMaximizeWindow(void);

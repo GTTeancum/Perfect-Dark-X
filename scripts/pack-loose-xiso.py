@@ -36,6 +36,12 @@ def main():
                     help='directory holding files/, segs/ and filenames.lst')
     ap.add_argument('--out', default='perfectdarkx-loose.iso')
     ap.add_argument('--gbc', default=None, help='optional pd.gbc')
+    ap.add_argument('--pd-ini', default=None,
+                    help='optional pd.ini override for test/qualification images')
+    ap.add_argument('--boot-ini', default=None,
+                    help='optional DVD-only pdx_boot.ini qualification override')
+    ap.add_argument('--texture-pack', default=None,
+                    help='optional ext_tex.pak built by tools/texturepack/build_xbox_pack.py')
     args = ap.parse_args()
 
     if not os.path.isfile(args.xbe):
@@ -43,16 +49,34 @@ def main():
     if not os.path.isdir(args.loose):
         sys.exit('loose dir not found: %s' % args.loose)
 
-    entries = [('default.xbe', args.xbe),
-               ('pd.ini', pack_xiso._PD_INI)]
+    pd_ini = args.pd_ini if args.pd_ini else pack_xiso._PD_INI
+    if args.pd_ini and not os.path.isfile(args.pd_ini):
+        sys.exit('pd.ini override not found: %s' % args.pd_ini)
 
-    tree = xdvdfs_tree.collect_tree(args.loose)
+    entries = [('default.xbe', args.xbe)]
+
+    controlled_root_files = {'pd.ini', 'pdx_boot.ini'}
+    tree = [entry for entry in xdvdfs_tree.collect_tree(args.loose)
+            if entry[0].replace('\\', '/').lower() not in controlled_root_files]
     if not tree:
         sys.exit('no files found under %s' % args.loose)
     entries.extend(tree)
+    # The loose extraction may contain host-generated configuration files.
+    # Keep the explicitly selected disc configuration authoritative and never
+    # leak a qualification boot override into a release image.
+    entries.append(('pd.ini', pd_ini))
+    if args.boot_ini:
+        if not os.path.isfile(args.boot_ini):
+            sys.exit('boot ini override not found: %s' % args.boot_ini)
+        entries.append(('pdx_boot.ini', args.boot_ini))
 
     if args.gbc and os.path.isfile(args.gbc):
         entries.append(('pd.gbc', args.gbc))
+
+    if args.texture_pack:
+        if not os.path.isfile(args.texture_pack):
+            sys.exit('texture pack not found: %s' % args.texture_pack)
+        entries.append(('ext_tex.pak', args.texture_pack))
 
     # Sanity-check the pieces romdata.c needs before burning an image.
     names = set(n for n, _ in entries)

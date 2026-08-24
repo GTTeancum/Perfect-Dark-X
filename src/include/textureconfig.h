@@ -2,9 +2,14 @@
 #define IN_TEXTURECONFIG_H
 #include <ultra64.h>
 
+#ifdef PLATFORM_N64
 extern Gfx g_TcGdl1[14];
-extern Gfx g_TcGdl2[13];
 extern Gfx g_TcGdl3[14];
+#else
+extern Gfx g_TcGdl1[15];
+extern Gfx g_TcGdl3[15];
+#endif
+extern Gfx g_TcGdl2[13];
 extern struct texturepair g_TcExplosionTexturePairs[15];
 extern struct textureconfig g_TcWallhitConfigs[18];
 extern struct textureconfig g_TcBeamConfigs[5];

@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "base_max_dimension": 128,
+  "large_max_dimension": 512,
+  "promote_ids": [
+    "009b",
+    "0216",
+    "089f",
+    "0a03"
+  ],
+  "rationale": {
+    "009b": "City-window atlas visible across the opening flyover.",
+    "0216": "Large illuminated architectural atlas where downscaling loses fine emissive detail.",
+    "089f": "Air Force One exterior atlas used over a large hero model.",
+    "0a03": "Large mountain backdrop whose high-frequency silhouette and snow detail benefit from the promoted tier."
+  }
+}

@@ -824,6 +824,7 @@ static MenuItemHandlerResult menuhandlerMSAA(s32 operation, struct menuitem *ite
 	return 0;
 }
 
+#ifndef PLATFORM_XBOX
 static MenuItemHandlerResult menuhandlerResolution(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	static char resstring[32];
@@ -856,6 +857,7 @@ static MenuItemHandlerResult menuhandlerResolution(s32 operation, struct menuite
 
 	return 0;
 }
+#endif
 
 static MenuItemHandlerResult menuhandlerTexFilter(s32 operation, struct menuitem *item, union handlerdata *data)
 {
@@ -1053,6 +1055,7 @@ struct menuitem g_ExtendedVideoMenuItems[] = {
 		0,
 		menuhandlerFullScreenMode,
 	},
+#ifndef PLATFORM_XBOX
 	{
 		MENUITEMTYPE_DROPDOWN,
 		0,
@@ -1061,6 +1064,7 @@ struct menuitem g_ExtendedVideoMenuItems[] = {
 		0,
 		menuhandlerResolution,
 	},
+#endif
 	{
 		MENUITEMTYPE_CHECKBOX,
 		0,

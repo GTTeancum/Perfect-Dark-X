@@ -542,7 +542,8 @@ def xemu_process_module_base(process_handle):
     return int(modules[0]) if modules[0] else None
 
 
-def xemu_trigger_native_screenshot(pid, xemu_exe, screenshot_dir, timeout=3.0):
+def xemu_trigger_native_screenshot(pid, xemu_exe, screenshot_dir, timeout=3.0,
+                                   pointer_rva=None):
     if os.name != "nt":
         return False, "xemu native screenshots require Windows", None
 
@@ -555,7 +556,8 @@ def xemu_trigger_native_screenshot(pid, xemu_exe, screenshot_dir, timeout=3.0):
         if name.lower().endswith(".png")
     }
 
-    pointer_rva = xemu_find_screenshot_flag_pointer_rva(xemu_exe)
+    if pointer_rva is None:
+        pointer_rva = xemu_find_screenshot_flag_pointer_rva(xemu_exe)
     if pointer_rva is None:
         return False, "xemu native screenshot flag path not found", None
 
@@ -1330,6 +1332,8 @@ def main():
                         help="Capture through XEMU's built-in F12 screenshot action.")
     parser.add_argument("--xemu-screenshot-dir", default="",
                         help="Directory watched for XEMU native screenshot PNGs.")
+    parser.add_argument("--xemu-screenshot-flag-rva", default="",
+                        help="Known XEMU screenshot-flag pointer RVA; skips the slow executable scan.")
     parser.add_argument("--display", choices=["xemu", "sdl", "none", "egl-headless", "nographic"],
                         default="xemu",
                         help="Xemu/QEMU display backend. Use none or egl-headless for unattended runs.")
@@ -1373,6 +1377,8 @@ def main():
                         help="Seconds between generic guest counter polls.")
     parser.add_argument("--poll-word-label", default="counter",
                         help="Label used for generic guest counter samples and summary.")
+    parser.add_argument("--poll-word-virtual", action="store_true",
+                        help="Read --poll-word-addr with the monitor virtual-memory x command.")
     parser.add_argument("--poll-xblog", action="store_true",
                         help="Poll SP/MP XBLog counters through the monitor during the run.")
     parser.add_argument("--poll-xblog-perf-only", action="store_true",
@@ -1418,7 +1424,9 @@ def main():
     if args.xemu_screenshot_dir:
         xemu_screenshot_dir = os.path.abspath(args.xemu_screenshot_dir)
     elif config_path:
-        xemu_screenshot_dir = os.path.join(os.path.dirname(config_path), "screenshots")
+        # XEMU's built-in F12 action writes beside its config file. This path
+        # is independent of the frontend's optional screenshots subdirectory.
+        xemu_screenshot_dir = os.path.dirname(config_path)
     else:
         xemu_screenshot_dir = os.path.abspath(prefix + "_xemu_screenshots")
     toml_backup = None
@@ -1561,6 +1569,8 @@ def main():
     emulation_speed = None
     last_fps_heartbeat_count = None
     poll_word_va = int(args.poll_word_addr, 0) if args.poll_word_addr else None
+    native_screenshot_flag_rva = (int(args.xemu_screenshot_flag_rva, 0)
+                                  if args.xemu_screenshot_flag_rva else None)
     poll_word_gpa = None
     poll_word_previous = None
     poll_word_rates = []
@@ -2465,16 +2475,19 @@ def main():
                 next_poll_word = elapsed + max(0.05, args.poll_word_interval)
                 try:
                     if poll_word_gpa is None:
-                        poll_word_gpa = monitor_gva_to_gpa(sock, poll_word_va)
+                        poll_word_gpa = (poll_word_va if args.poll_word_virtual else
+                                         monitor_gva_to_gpa(sock, poll_word_va))
                         if poll_word_gpa is not None:
-                            log("word_counter_mapped label=%s va=0x%08x gpa=0x%08x" %
+                            log("word_counter_mapped label=%s va=0x%08x read=0x%08x command=%s" %
                                 (args.poll_word_label, poll_word_va,
-                                 poll_word_gpa))
+                                 poll_word_gpa,
+                                 "x" if args.poll_word_virtual else "xp"))
                     if poll_word_gpa is not None:
                         poll_word_count = max(1, min(512, args.poll_word_count))
                         reply = monitor_cmd(
-                            sock, "xp/%dwx 0x%08x" %
-                            (poll_word_count, poll_word_gpa), 0.15)
+                            sock, "%s/%dwx 0x%08x" %
+                            ("x" if args.poll_word_virtual else "xp",
+                             poll_word_count, poll_word_gpa), 0.15)
                         words = parse_monitor_words(reply, poll_word_gpa)
                         if words:
                             if poll_word_count > 1:
@@ -4261,7 +4274,8 @@ def main():
                         xblog_phys_delta = xblog_va_for_probe - xblog_addr
                     if args.xemu_native_screenshots:
                         ok, detail, native_path = xemu_trigger_native_screenshot(
-                            proc.pid, xemu_exe, xemu_screenshot_dir)
+                            proc.pid, xemu_exe, xemu_screenshot_dir,
+                            pointer_rva=native_screenshot_flag_rva)
                         if ok and native_path:
                             png = native_path
                     else:

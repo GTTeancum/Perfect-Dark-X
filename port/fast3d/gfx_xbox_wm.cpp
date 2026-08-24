@@ -7,11 +7,10 @@
 //   • Frame pacing (pb_show_front_screen / pb_wait_for_vbl)
 //   • Polling the SDL event queue (for SDL_QuitEvent from the dashboard button)
 //
-// Supported video modes (Xbox hardware):
-//   #0  640×480  480i   NTSC default
-//   #1  640×480  480p   (HDTV cable required)
-//   #2  720×480  480p   (widescreen)
-//   #3  1280×720 720p   (Xbox HD AV pack required)
+// Aspect ratio and resolution come exclusively from the Xbox dashboard. A
+// console with 720p enabled uses guarded native 1280x720; otherwise the game
+// uses 640x480 as dashboard-selected 4:3 or anamorphic 16:9. The 720p path
+// falls back to 480-line output if its mode or pbkit allocation cannot start.
 
 #ifdef PLATFORM_XBOX
 
@@ -37,24 +36,13 @@ extern "C" {
 
 // ── Supported display modes ───────────────────────────────────────────────────
 
-struct XboxDisplayMode {
-    int     width;
-    int     height;
-    int     refresh;    // Hz
-    bool    progressive;
-    bool    widescreen;
-    VIDEO_MODE hal_mode;
-};
-
-static const XboxDisplayMode k_modes[] = {
-    { 640,  480, 60, false, false, {640, 480, 32, 60} },   // 480i
-    { 640,  480, 60, true,  false, {640, 480, 32, 60} },   // 480p
-    { 720,  480, 60, true,  true,  {720, 480, 32, 60} },   // 480p wide
-    { 1280, 720, 60, true,  false, {1280,720, 32, 60} },   // 720p
-};
-static const int k_num_modes = (int)(sizeof(k_modes) / sizeof(k_modes[0]));
-
-static int g_current_mode_idx = 0;  // default 480i
+static int g_output_width = 640;
+static int g_output_height = 480;
+static int g_refresh = 60;
+static bool g_widescreen = false;
+static bool g_progressive = false;
+static bool g_can_480p = false;
+static bool g_can_720p = false;
 static bool g_is_running = true;
 
 static void (*g_on_fullscreen_changed)(bool) = nullptr;
@@ -76,38 +64,171 @@ static double qpc_to_sec(ULONGLONG ticks)
     return (double)ticks / (double)g_perf_freq;
 }
 
+float gfx_xbox_wm_get_display_aspect(void)
+{
+    if (g_widescreen || (g_output_width == 1280 && g_output_height == 720)) {
+        return 16.0f / 9.0f;
+    }
+    return (float)g_output_width / (float)g_output_height;
+}
+
+bool gfx_xbox_wm_is_widescreen(void)
+{
+    return g_widescreen;
+}
+
+bool gfx_xbox_wm_is_progressive(void)
+{
+    return g_progressive;
+}
+
+bool gfx_xbox_wm_is_720p(void)
+{
+    return g_output_width == 1280 && g_output_height == 720;
+}
+
 // ── Initialisation ────────────────────────────────────────────────────────────
 
 static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
 {
+    (void)settings;
     // Resolve performance frequency
     // NXDK: KeQueryPerformanceFrequency() returns ULONGLONG directly (no pointer arg)
     g_perf_freq = KeQueryPerformanceFrequency();
 
-    // NXDK does not expose XGetVideoFlags() from the original XSDK.
-    // Default to 480i for maximum compatibility.
-    // TODO: detect HDTV capability via EEPROM or XVideoQueryAvailableModes()
-    // once we have the port running.
-    (void)settings;
-    g_current_mode_idx = 0; // 480i
+    // NXDK exposes the dashboard/AV-pack state through the HAL encoder flags.
+    // Scan mode and aspect are independent: 480p may be enabled in 4:3, while
+    // widescreen is a logical 16:9 presentation over the same 640x480 buffer.
+    const DWORD encoder = XVideoGetEncoderSettings();
+    const bool dashboard_wide = (encoder & VIDEO_WIDESCREEN) != 0;
+    g_can_480p = (encoder & VIDEO_MODE_480P) != 0;
+    g_can_720p = (encoder & VIDEO_MODE_720P) != 0;
+    g_widescreen = dashboard_wide;
 
-    const XboxDisplayMode &m = k_modes[g_current_mode_idx];
-    sysLogPrintf(LOG_NOTE, "Xbox video mode: %dx%d %s",
-        m.width, m.height, m.progressive ? "progressive" : "interlaced");
+    g_output_width = 640;
+    g_output_height = 480;
+    g_progressive = g_can_480p;
 
-    XVideoSetMode(m.width, m.height, m.hal_mode.bpp, m.hal_mode.refresh);
+    if (g_can_720p) {
+        g_output_width = 1280;
+        g_output_height = 720;
+        g_widescreen = true;
+        g_progressive = true;
+    }
+
+    bool mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, g_refresh) != FALSE;
+    if (!mode_ok && (g_output_width != 640 || g_output_height != 480)) {
+        serialPuts("PD-X: 720p mode unavailable; falling back to 480-line output\n");
+        g_output_width = 640;
+        g_output_height = 480;
+        g_widescreen = dashboard_wide;
+        g_progressive = g_can_480p;
+        mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, g_refresh) != FALSE;
+    }
+    if (!mode_ok) {
+        sysFatalError("No compatible 640x480 Xbox video mode.");
+    }
+
+    VIDEO_MODE active_mode = XVideoGetMode();
+    if (active_mode.width != g_output_width || active_mode.height != g_output_height) {
+        if (g_output_width == 1280 && g_output_height == 720) {
+            serialPuts("PD-X: 720p raster mismatch; falling back to 640x480\n");
+            g_output_width = 640;
+            g_output_height = 480;
+            g_widescreen = dashboard_wide;
+            g_progressive = g_can_480p;
+            mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, g_refresh) != FALSE;
+            active_mode = XVideoGetMode();
+        }
+        if (!mode_ok || active_mode.width != g_output_width
+                || active_mode.height != g_output_height) {
+            sysFatalError("Xbox video raster mismatch: requested %dx%d, active %dx%d.",
+                          g_output_width, g_output_height,
+                          active_mode.width, active_mode.height);
+        }
+    }
+
+    {
+        char line[192];
+        snprintf(line, sizeof(line),
+                 "PD-X: video encoder=0x%08lx dashWide=%d can480p=%d can720p=%d output=%dx%d aspect=%s scan=%s\n",
+                 (unsigned long)encoder, dashboard_wide ? 1 : 0,
+                 g_can_480p ? 1 : 0, g_can_720p ? 1 : 0,
+                 g_output_width, g_output_height,
+                 g_widescreen ? "16:9" : "4:3",
+                 g_progressive ? "progressive" : "interlaced");
+        serialPuts(line);
+        sysLogPrintf(LOG_NOTE, "Xbox video: output=%dx%d aspect=%s scan=%s",
+                     g_output_width, g_output_height,
+                     g_widescreen ? "16:9" : "4:3",
+                     g_progressive ? "progressive" : "interlaced");
+    }
 
     // The renderer uses one full-size, non-rotating surface as a scratch render
     // target.  Persistent game framebuffers are copied to/from their own
     // compact texture allocations, so a single extra pbkit surface is enough
     // for menu blur and any future offscreen pass without spending ~1.2 MiB on
     // each of the game's many 16x16 capture buffers.
-    pb_extra_buffers(1);
+    // At 720p one scratch surface costs another 3.5 MiB. The optional mode
+    // disables framebuffer effects and renders directly to the back buffer so
+    // the 16 MiB game heap remains available.
+    pb_extra_buffers(gfx_xbox_wm_is_720p() ? 0 : 1);
 
     // Initialise pbkit (NV2A push-buffer engine)
     int pb_err = pb_init();
+    bool pb_geometry_ok = pb_err == 0
+        && pb_back_buffer_width() == (DWORD)g_output_width
+        && pb_back_buffer_height() == (DWORD)g_output_height;
+    // pbkit returns -11 for framebuffer/depth/extra-surface allocation
+    // failures and has already called pb_kill() before returning it. Retry
+    // only that recoverable memory case, or a successful init whose raster is
+    // wrong. Other errors are unrelated to 720p surface pressure and remain
+    // fatal; calling pb_kill() again after them may double-tear-down pbkit.
+    const bool retry_720p = g_output_width == 1280 && g_output_height == 720
+        && (pb_err == -11 || (pb_err == 0 && !pb_geometry_ok));
+    if (retry_720p) {
+        // Native 720p costs roughly 8 MiB more than the qualified 480-line
+        // path before game or replacement textures. Never strand the user at
+        // boot if contiguous allocation cannot satisfy that optional tier.
+        serialPuts(pb_err != 0
+            ? "PD-X: 720p pbkit allocation failed; retrying 640x480\n"
+            : "PD-X: 720p pbkit raster mismatch; retrying 640x480\n");
+        if (pb_err == 0) {
+            pb_kill();
+        }
+        g_output_width = 640;
+        g_output_height = 480;
+        g_widescreen = dashboard_wide;
+        g_progressive = g_can_480p;
+        if (!XVideoSetMode(g_output_width, g_output_height, 32, g_refresh)) {
+            sysFatalError("720p fallback could not set 640x480 video mode.");
+        }
+        pb_extra_buffers(1);
+        pb_err = pb_init();
+        pb_geometry_ok = pb_err == 0
+            && pb_back_buffer_width() == (DWORD)g_output_width
+            && pb_back_buffer_height() == (DWORD)g_output_height;
+    }
     if (pb_err != 0) {
         sysFatalError("pb_init() failed (err %d).  Cannot initialise GPU.", pb_err);
+    }
+    if (!pb_geometry_ok) {
+        sysFatalError("pbkit raster mismatch: requested %dx%d, active %lux%lu.",
+                      g_output_width, g_output_height,
+                      (unsigned long)pb_back_buffer_width(),
+                      (unsigned long)pb_back_buffer_height());
+    }
+
+    active_mode = XVideoGetMode();
+    {
+        char raster_line[144];
+        snprintf(raster_line, sizeof(raster_line),
+                 "PD-X: verified raster video=%dx%d pbkit=%lux%lu aspect=%s\n",
+                 active_mode.width, active_mode.height,
+                 (unsigned long)pb_back_buffer_width(),
+                 (unsigned long)pb_back_buffer_height(),
+                 g_widescreen ? "16:9" : "4:3");
+        serialPuts(raster_line);
     }
 
     pb_show_front_screen();
@@ -136,21 +257,24 @@ static void xbox_wm_close(void)
 
 static int xbox_wm_get_num_display_modes(void)
 {
-    return k_num_modes;
+    // Xbox users cannot override the dashboard-selected mode in-game.
+    return 1;
 }
 
 static int xbox_wm_get_display_mode(int modenum, int *out_w, int *out_h)
 {
-    if (modenum < 0 || modenum >= k_num_modes) return 0;
-    *out_w = k_modes[modenum].width;
-    *out_h = k_modes[modenum].height;
-    return 1;
+    if (modenum == 0) {
+        *out_w = g_output_width;
+        *out_h = g_output_height;
+        return 1;
+    }
+    return 0;
 }
 
 static int xbox_wm_get_current_display_mode(int *out_w, int *out_h)
 {
-    *out_w = k_modes[g_current_mode_idx].width;
-    *out_h = k_modes[g_current_mode_idx].height;
+    *out_w = g_output_width;
+    *out_h = g_output_height;
     return 1;
 }
 
@@ -175,8 +299,8 @@ static void xbox_wm_set_maximize(bool enable)          { (void)enable; }
 static void xbox_wm_get_dimensions(uint32_t *w, uint32_t *h,
                                     int32_t *posX, int32_t *posY)
 {
-    *w    = (uint32_t)k_modes[g_current_mode_idx].width;
-    *h    = (uint32_t)k_modes[g_current_mode_idx].height;
+    *w    = (uint32_t)g_output_width;
+    *h    = (uint32_t)g_output_height;
     *posX = 0;
     *posY = 0;
 }
@@ -204,7 +328,7 @@ static void xbox_wm_set_closest_resolution(int32_t w, int32_t h, bool center)
 
 static void xbox_wm_get_active_window_refresh_rate(uint32_t *rr)
 {
-    *rr = (uint32_t)k_modes[g_current_mode_idx].refresh;
+    *rr = (uint32_t)g_refresh;
 }
 
 // ── Cursor / title (no-ops on Xbox) ──────────────────────────────────────────

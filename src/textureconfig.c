@@ -1,5 +1,6 @@
 #include <ultra64.h>
 #include "data.h"
+#include "gbiex.h"
 #include "textureconfig.h"
 #include "types.h"
 
@@ -11,6 +12,9 @@ Gfx g_TcGdl1[] = {
 	gsDPSetCombineMode(G_CC_MODULATEIA, G_CC_MODULATEIA),
 	gsSPTexture(0xffff, 0xffff, 0, G_TX_RENDERTILE, G_ON),
 	gsDPSetTextureLUT(G_TT_NONE),
+#ifndef PLATFORM_N64
+	gsDPSetTextureInfoEXT(G_TEXTYPE_GENERAL, 0, 0x002a),
+#endif
 	gsDPSetTextureImage(G_IM_FMT_IA, G_IM_SIZ_16b, 1, 0xabcd002a),
 	gsDPLoadSync(),
 	gsDPLoadBlock(G_TX_LOADTILE, 0, 0, 1567, 0),
@@ -43,6 +47,9 @@ Gfx g_TcGdl3[] = {
 	gsDPSetTextureLOD(G_TL_TILE),
 	gsDPSetCombineMode(G_CC_MODULATEIA, G_CC_MODULATEIA),
 	gsSPTexture(0xffff, 0xffff, 0, G_TX_RENDERTILE, G_ON),
+#ifndef PLATFORM_N64
+	gsDPSetTextureInfoEXT(G_TEXTYPE_GENERAL, 0, 0x0002),
+#endif
 	gsDPSetTextureImage(G_IM_FMT_IA, G_IM_SIZ_16b, 1, 0xabcd0002),
 	gsDPLoadSync(),
 	gsDPLoadBlock(G_TX_LOADTILE, 0, 0, 511, 0),

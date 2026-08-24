@@ -25,11 +25,15 @@ struct TextureCacheKey {
     const uint8_t* palette_addrs[2];
     uint8_t fmt, siz;
     uint8_t palette_index;
+    uint32_t external_id;
 
     bool operator==(const TextureCacheKey&) const noexcept = default;
 
     struct Hasher {
         size_t operator()(const TextureCacheKey& key) const noexcept {
+            if (key.texture_addr == nullptr) {
+                return (size_t)(0x9e3779b9u ^ key.external_id);
+            }
             uintptr_t addr = (uintptr_t)key.texture_addr;
             return (size_t)(addr ^ (addr >> 5));
         }
@@ -41,6 +45,7 @@ typedef std::pair<const TextureCacheKey, struct TextureCacheValue> TextureCacheN
 
 struct TextureCacheValue {
     uint32_t texture_id;
+    size_t texture_bytes;
     uint8_t cms, cmt;
     bool linear_filter;
 

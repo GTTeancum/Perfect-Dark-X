@@ -92,7 +92,6 @@ def main() -> int:
         "--config-path", str(Path(args.config_path).resolve()),
         "--map-file", str(map_file),
         "--sample-eip-interval", "1",
-        "--visible",
     ]
 
     if not args.screenshots:

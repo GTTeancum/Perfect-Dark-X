@@ -6,9 +6,14 @@ pd.*.z64
 build
 /build-pc/
 /build-xbox/
+/build-xbox-trace/
 /scripts/output/
 /scripts/*.log
 /scripts/*.txt
+/Perfect Dark XBLA/
+/texturepack-work/
+__pycache__/
+*.py[cod]
 /*.z64
 .flatpak-builder
 extracted

@@ -1,214 +1,239 @@
-# Perfect Dark port
+# Perfect Dark X
 
-This repository contains a work-in-progress port of the [Perfect Dark decompilation](https://github.com/n64decomp/perfect_dark) to modern platforms.
+Perfect Dark X is an Original Xbox port of the open-source
+[Perfect Dark PC port](https://github.com/perfect-dark-pc-port/perfect_dark),
+which is based on the
+[Perfect Dark decompilation project](https://github.com/n64decomp/perfect_dark).
+It targets a stock 64 MiB Xbox through [nxdk](https://github.com/XboxDev/nxdk)
+and uses a native pbkit/NV2A renderer, Xbox controller input, and direct AC97
+audio output.
 
-To run the port, you must already have a Perfect Dark ROM, specifically one of the following:
-* `ntsc-final`/`US V1.1`/`US Rev 1` (md5 `e03b088b6ac9e0080440efed07c1e40f`).  
-  **This is the recommended version to use**.  
-  Called `NTSC version 8.7 final` on the boot screen.
-* `ntsc-1.0`/`US V1.0` (md5 `7f4171b0c8d17815be37913f535e4e93`).  
-  Technically supported, but not recommended.  
-  Called `NTSC version 8.7 final` on the boot screen as well.
-* `jpn-final` (md5 `538d2b75945eae069b29c46193e74790`).  
-  Technically supported, but requires a separate custom-built executable.  
-  Called `JPN version 8.9 final` on the boot screen.
-* `pal-final` (md5 `d9b5cd305d228424891ce38e71bc9213`).  
-  Technically supported, but requires a separate custom-built executable.  
-  Called `PAL 8.7 final` on the boot screen.
+This repository contains source code and asset-processing tools. It does not
+contain a Perfect Dark ROM, XBLA game data, or generated replacement textures.
+You must own the source games and supply your own assets when building.
 
-## Status
+## Screenshots
 
-The game is in a mostly functional state, with both singleplayer and split-screen multiplayer modes fully working.  
-There are minor graphics- and gameplay-related issues, and possibly occasional crashes.
+<table>
+  <tr>
+    <td><img src="docs/screenshots/single-player-720p.png" alt="Perfect Dark X single-player at 720p"></td>
+    <td><img src="docs/screenshots/four-player-720p.png" alt="Perfect Dark X four-player split-screen at 720p"></td>
+  </tr>
+  <tr>
+    <td align="center">Single-player</td>
+    <td align="center">Four-player split-screen</td>
+  </tr>
+</table>
 
-**The following extra features are implemented:**
-* mouselook;
-* dual analog controller support;
-* widescreen resolution support;
-* configurable field of view;
-* 60 FPS support, including fixes for some framerate-related issues;
-* fixes for a couple original bugs and crashes;
-* basic mod support, currently enough to load a few custom levels;
-* slightly expanded memory heap size;
-* experimental high framerate support (up to 240 FPS):
-  * enable `Uncap Tickrate` in `Extended Video Options` to activate;
-  * in practice the game will have issues running faster than ~165 FPS, so use VSync or `Video.FramerateLimit` to cap it.
-* emulate the Transfer Pak functionality the game has on the Nintendo 64 to unlock some cheats automatically.
+Both images are native XEMU screenshots from a 1280x720 guest raster. They
+have not been resized or captured from the desktop.
 
-**The following platforms are officially supported and tested:**
-* Windows 7+: i686, x86_64
-* Linux: i686, x86_64
-* MacOS: x86_64 (OS 10.9+), arm64 (OS 11.0+)
-* Nintendo Switch: arm64
+## Current status
 
-## Download
+This is a release-preview port. The campaign, combat simulator, menus, sound,
+dual-analog controls, and two- to four-player split-screen are running on the
+Original Xbox target. The game runs without keeping a 32 MiB N64 ROM resident:
+the release image uses a loose extracted asset tree so the memory can instead
+serve the game and renderer.
 
-Latest [automatic builds](https://github.com/fgsfdsfgs/perfect_dark/releases/tag/ci-dev-build) for supported platforms:
-* [x86_64-windows](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-x86_64-windows.zip)
-* [i686-windows](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-i686-windows.zip)
-* [x86_64-linux](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-x86_64-linux.tar.gz)
-* [i686-linux](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-i686-linux.tar.gz)
-* [arm64-nswitch](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-arm64-nswitch.zip)
+Implemented Xbox-specific work includes:
 
-If you are looking for netplay builds (the `port-net` branch), see [this link](https://github.com/fgsfdsfgs/perfect_dark/blob/port-net/README.md#download).
+- native pbkit/NV2A rendering with Xbox video-mode negotiation;
+- dashboard-controlled 480i, 480p, widescreen, and native 720p output;
+- Hor+ world projection with existing HUD and menu safe-area behavior;
+- direct 48 kHz stereo AC97 audio;
+- Original Xbox controller support for up to four local players;
+- bounded, demand-loaded diffuse texture replacements;
+- ROM-free XDVDFS packaging from an owner-extracted loose asset tree;
+- serial diagnostics, crash reporting, and a non-focus-stealing XEMU test
+  harness with native emulator screenshots.
 
-## Running
+### Video modes
 
-You must already have a Perfect Dark ROM to run the game, as specified above.  
+Resolution and aspect ratio come exclusively from the Xbox dashboard. There is
+no in-game resolution or aspect-ratio override.
 
-This assumes that you're using an x86_64 build. If you aren't, replace `x86_64` below with your arch (e.g. `i686`).
+| Dashboard mode | Render raster | Presentation | Frame cap |
+| --- | ---: | --- | ---: |
+| 480i | 640x480 | Dashboard 4:3 or anamorphic 16:9 | 60 FPS |
+| 480p | 640x480 | Dashboard 4:3 or anamorphic 16:9 | 60 FPS |
+| 720p | 1280x720 | 16:9 only | 30 FPS |
 
-1. Create a directory named `data` next to `pd.x86_64` if it's not there.
-2. Put your Perfect Dark NTSC ROM named `pd.ntsc-final.z64` into it.
-3. Run the `pd.x86_64` executable.
+The 720p path verifies both the active Xbox video raster and pbkit back buffer
+before continuing. If the mode or its recoverable surface allocation fails,
+the game falls back to dashboard-aspect 640x480. At 720p, framebuffer effects
+are disabled and the external-texture residency budget is reduced to protect
+the stock 64 MiB memory configuration.
 
-If you want to use a PAL or JPN ROM instead, put them into the `data` directory and run the appropriate executable:
-* PAL: ROM name `pd.pal-final.z64`, executable name `pd.pal.x86_64`.
-* JPN: ROM name `pd.jpn-final.z64`, executable name `pd.jpn.x86_64`.
+Stationary 720p split-screen qualification currently measures:
 
-Optionally, you can also put your Perfect Dark for GameBoy Color ROM named `pd.gbc` in the `data` directory if you want to emulate having the Nintendo 64's Transfer Pak and unlock some cheats automatically.
+| Layout | Average | Minimum | Maximum |
+| --- | ---: | ---: | ---: |
+| 2 players | 28.669 FPS | 27.139 FPS | 29.991 FPS |
+| 3 players | 29.771 FPS | 29.558 FPS | 30.134 FPS |
+| 4 players | 29.749 FPS | 29.466 FPS | 30.069 FPS |
 
-Optionally, you can move the data folder to `~/.local/share/perfectdark` on Linux or `~/Library/Application Support/perfectdark` on MacOS.
+These are layout and memory-residency baselines, not worst-case combat or
+explosion benchmarks.
 
-Additional information can be found in the [wiki](https://github.com/fgsfdsfgs/perfect_dark/wiki).
+### Known limitations
 
-A GPU supporting OpenGL 3.0/ES3.0 or above is required to run the port.
+- Visual parity is still being refined, particularly framebuffer-dependent
+  effects and some scripted presentation at 720p.
+- The 720p tier intentionally trades effects and texture residency for a native
+  widescreen raster and stable memory use. The 480-line path remains the
+  compatibility target.
+- The XBLA diffuse pack is conservatively matched against stock N64 textures.
+  Unmatched textures fall back to the original N64 asset.
+- XBLA-only bump, normal, specular, cubemap, and other material maps are not
+  loaded.
 
-### Installing the Nintendo Switch version
+## Installing a release
 
-The Nintendo Switch build ZIP comes with all 3 regions in different folders: `perfectdark`, `perfectdark_pal` and `perfectdark_jpn`.
+### Requirements
 
-Take the folder for the region you want and put it into the `/switch` folder on your SD card, then put your ROM into the `data` folder inside of the folder you extracted as described above.
+- A modified Original Xbox capable of launching unsigned XBE files, or XEMU.
+- For 480p or 720p on hardware, a compatible HD AV/component setup and those
+  modes enabled in the Microsoft dashboard.
+- 720p is always widescreen. Use the dashboard's 480-line 4:3 mode for a 4:3
+  display.
+
+Release archives contain `pdx-textures.iso`, an Xbox XDVDFS image. It is not a
+standard ISO 9660 disc image.
+
+### Original Xbox: folder installation
+
+1. Extract `pdx-textures.iso` with an XDVDFS-aware Xbox ISO tool such as
+   `extract-xiso`. Windows Explorer and ordinary ISO tools will not extract it
+   correctly.
+2. Transfer the extracted directory to a games folder on the Xbox hard drive,
+   for example `F:\Games\Perfect Dark X`, using FTP or another Xbox-aware
+   transfer method.
+3. Confirm the folder contains `default.xbe`, `pd.ini`, `filenames.lst`,
+   `files`, `segs`, and `ext_tex.pak`.
+4. Configure aspect ratio and HD modes in the Microsoft dashboard before
+   launching the game.
+5. Launch `default.xbe` from the replacement dashboard.
+
+A dashboard or BIOS with direct XISO support may launch `pdx-textures.iso`
+without extracting it. Consult that loader's documentation; folder installation
+is the most broadly compatible method.
+
+### XEMU
+
+1. Configure XEMU with a compatible MCPX ROM, Xbox BIOS, hard-disk image, and
+   EEPROM.
+2. Enable the desired widescreen/progressive modes in the emulated Microsoft
+   dashboard.
+3. Load `pdx-textures.iso` as the game disc and start the emulator.
+4. When using 720p, set XEMU's presentation aspect to 16:9. Some XEMU versions
+   can choose a 4:3 host surface when their presentation setting is left on
+   `Auto`, even though the guest is rendering 1280x720.
 
 ## Controls
 
-1964GEPD-style and Xbox-style bindings are implemented.
+The default Xbox-style scheme uses both analog sticks:
 
-N64 pad buttons X and Y (or `X_BUTTON`, `Y_BUTTON` in the code) refer to the reserved buttons `0x40` and `0x80`, which are also leveraged by 1964GEPD.
+| Action | Original Xbox controller |
+| --- | --- |
+| Move | Left stick |
+| Look / aim | Right stick |
+| Fire / accept | Right trigger |
+| Aim mode | Left trigger |
+| Use / accept | A |
+| Previous weapon / cancel | B |
+| Reload | X |
+| Next weapon | Y |
+| Radial menu | Black |
+| Alternative fire | White |
+| Crouch cycle | Left thumbstick click |
+| Pause | Start |
 
-Support for one controller, two-stick configurations are enabled for 1.2.
+Controls can also be adjusted through the game's control options. Each local
+player is assigned a connected controller during startup.
 
-Note that the mouse only controls player 1.
+## Building the Xbox port
 
-Controls can be rebound in `pd.ini`. Default control scheme is as follows:
+### Prerequisites
 
-| Action           | Keyboard and mouse     | Xbox pad                 | N64 pad                   |
-| -                | -                      | -                        | -                         |
-| Fire / Accept    | LMB/Space              | RT                       | Z Trigger                 |
-| Aim mode         | RMB/Z                  | LT                       | R Trigger                 |
-| Use / Cancel     | E                      | N/A                      | B                         |
-| Use / Accept     | N/A                    | A                        | A                         |
-| Crouch cycle     | N/A                    | LS Click                 | `0x80000000` (Extra)      |
-| Half-Crouch      | Shift                  | N/A                      | `0x40000000` (Extra)      |
-| Full-Crouch      | Control                | N/A                      | `0x20000000` (Extra)      |
-| Reload           | R                      | X                        | X `(0x40)`                |
-| Previous weapon  | Mousewheel forward     | B                        | D-Left                    |
-| Next weapon      | Mousewheel back        | Y                        | Y `(0x80)`                |
-| Radial menu      | Q                      | LB                       | D-Down                    |
-| Alt fire mode    | F                      | RB                       | L Trigger                 |
-| Alt-fire oneshot | `F + LMB` or `E + LMB` | `A + RT` or  `RB + RT`   | `A + Z`     or `L + Z`    |
-| Quick-detonate   | `E + Q`   or `E + R`   | `A + B`  or  `A + X`     | `A + D-Left`or `A + X`    |
+- Windows with PowerShell or an MSYS2 environment;
+- [nxdk](https://github.com/XboxDev/nxdk) at `C:\nxdk`;
+- CMake and Ninja;
+- LLVM/Clang supported by nxdk;
+- Python 3;
+- a legally owned `ntsc-final`/US v1.1 Perfect Dark ROM with MD5
+  `e03b088b6ac9e0080440efed07c1e40f`.
 
-## Building
+The commands below are shown for PowerShell from the repository root.
 
-### Windows
+### 1. Extract the loose game data
 
-1. Install [MSYS2](https://www.msys2.org).
-2. Open the `MINGW64` prompt if building for x86_64, or the `MINGW32` prompt if building for i686. (**NOTE:** _do not_ use the `MSYS` prompt)
-3. Install dependencies:  
-   `pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-SDL2 mingw-w64-x86_64-zlib mingw-w64-x86_64-cmake mingw-w64-x86_64-python3 mingw-w64-i686-toolchain mingw-w64-i686-SDL2 mingw-w64-i686-zlib mingw-w64-i686-cmake mingw-w64-i686-python3 make git`
-4. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-5. Run `cmake -G"Unix Makefiles" -Bbuild .`.
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.\
-6. Run `cmake --build build -j4 -- -O`.
-7. The resulting executable will be at `build/pd.x86_64.exe` (or at `build/pd.i686.exe` if building for i686).
-8. If you don't know where you downloaded the source to, you can run `explorer .` to open the current directory.
+```powershell
+python tools/extract-loose pd.ntsc-final.z64 `
+  --romid ntsc-final --out build/loose
+```
 
-### Linux
+The output contains `files/`, `segs/`, and `filenames.lst`. These generated,
+copyrighted assets are ignored by Git and must not be committed.
 
-1. Ensure you have gcc, g++ (version 10.0+), make, cmake, git, python3 and SDL2 (version 2.0.12+), libGL and ZLib installed on your system.
-   * If you wish to crosscompile, you will also need to have libraries and compilers for the target platform installed, e.g. `gcc-multilib` and `g++-multilib` for x86_64 -> i686 crosscompilation.
-2. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-3. Run the following command:
-   * ```cmake -G"Unix Makefiles" -Bbuild .```
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.
-   * Add ` -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32` at the end of the command if you want to crosscompile from x86_64 to x86.
-4. Run `cmake --build build -j4`.
-5. The resulting executable will be at `build/pd.<arch>` (for example `build/pd.x86_64`).
+### 2. Configure and build the XBE
 
-### MacOS
+```powershell
+$env:NXDK_DIR = 'C:\nxdk'
+$env:Path = 'C:\msys64\mingw64\bin;C:\Program Files\LLVM\bin;' + $env:Path
 
-1. Set up Homebrew.
-2. Install dependencies:
-   * Execute command: `brew install cmake gcc python3 zlib git`
-3. Install SDL2:
-   * Execute commands:
-     ```
-     wget http://libsdl.org/release/SDL2-2.30.9.dmg -O SDL2.dmg
-     hdiutil mount SDL2.dmg
-     sudo cp -vr /Volumes/SDL2/SDL2.framework /Library/Frameworks
-     hdiutil detach /Volumes/SDL2
-     ```
-   * This installs SDL2 system-wide and this is how the automatic builds are done. The game will also look for it in the executable path, so you could
-     download it locally instead.
-4. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-5. Configure:
-   * Execute command: `cmake -G"Unix Makefiles" -Bbuild -DCMAKE_OSX_ARCHITECTURES=x86_64 .`
-   * Replace `x86_64` with `arm64` if building for an ARM64 Mac.
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.
-6. Build:
-   * Execute command: `cmake --build build --target pd -j4 --clean-first`
-7. The resulting executable will be at `build/pd.<arch>` (for example `build/pd.x86_64`).
-   * You might need to execute `chmod +x build/pd.x86-64` before you can run it.
+cmake -S . -B build-xbox -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-nxdk.cmake `
+  -DCMAKE_MAKE_PROGRAM=C:/msys64/mingw64/bin/ninja.exe `
+  -DCMAKE_BUILD_TYPE=Release
 
-### Nintendo Switch
+cmake --build build-xbox --parallel
+```
 
-1. Set up the [devkitA64 environment](https://devkitpro.org/wiki/Getting_Started).
-   * On Windows you can do it under MSYS2 or WSL, usually MSYS2 is recommended.
-   * If using MSYS2, make sure to use the **MSYS2** shell, **not** MINGW32 or MINGW64.
-2. Install host dependencies:
-   * On MSYS2: execute command `pacman -Syuu && pacman -S git make cmake python3`
-   * On Linux: use your package manager as normal to install the above dependencies.
-3. Install Switch toolchain and dependencies:
-   * Execute commands:
-     ```
-     dkp-pacman -Syuu
-     dkp-pacman -S devkitA64 libnx switch-zlib switch-sdl2 switch-cmake dkp-toolchain-vars
-     ```
-   * If in MSYS2 or `dkp-pacman` doesn't work, replace it with just `pacman`.
-4. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-5. Ensure devkitA64 environment variables are set:
-   * Execute command: `source /opt/devkitpro/switchvars.sh`
-   * If your `$DEVKITPRO` path is different, substitute that instead or set the variables manually.
-6. Configure:
-   * Execute command: `aarch64-none-elf-cmake -G"Unix Makefiles" -Bbuild .`
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.
-7. Build:
-   * Execute command: `make -C build -j4`
-8. The resulting executable will be at `build/pd.arm64.nro`.
+The resulting executable is `build-xbox/default.xbe`.
 
-### Notes
+### 3. Build the optional diffuse texture pack
 
-Alternate compilers or toolchains can be specified by passing `-DCMAKE_TOOLCHAIN_FILE=whatever` as normal. The port does not build with Visual Studio.
+The replacement pack requires an owner-supplied Perfect Dark XBLA archive.
+Extraction and matching are intentionally separate from the game build:
 
-You will need to provide a `jpn-final` or `pal-final` ROM to run executables built for those regions, named `pd.jpn-final.z64` or `pd.pal-final.z64`.
+- [XBLA extraction tools](tools/xbla/README.md)
+- [N64-to-XBLA texture matching and Xbox packaging](tools/texturepack/README.md)
 
-It might be possible to build and run the game on platforms that are not specified in the supported platforms list (e.g. Linux on armv7), but this has not been tested.
+The final pack is `texturepack-work/release/ext_tex.pak`.
 
-## Credits
+### 4. Pack the release XISO
 
-* the original [decompilation project](https://github.com/n64decomp/perfect_dark) authors;
-* Ryan Dwyer for the above, additional help, and `pd-extract`;
-* doomhack for the only other publicly available [PD porting effort](https://github.com/doomhack/perfect_dark) I could find;
-* [sm64-port](https://github.com/sm64-port/sm64-port) authors for the audio mixer and some other changes;
-* [Ship of Harkinian team](https://github.com/Kenix3/libultraship/tree/main/src/fast), Emill and MaikelChan for the libultraship version of fast3d that this port uses;
-* lieff for [minimp3](https://github.com/lieff/minimp3);
-* Mouse Injector and 1964GEPD authors for some of the 60FPS- and mouselook-related fixes;
-* Raf for the 64-bit port;
-* NicNamSam for the icon;
-* everyone who has submitted pull requests and issues to this repository and tested the port;
-* probably more I'm forgetting.
+With the replacement texture pack:
+
+```powershell
+python scripts/pack-loose-xiso.py `
+  --xbe build-xbox/default.xbe `
+  --loose build/loose `
+  --texture-pack texturepack-work/release/ext_tex.pak `
+  --out build-xbox/pdx-textures.iso
+```
+
+For a stock-texture build, omit `--texture-pack`. Qualification-only
+`pdx_boot.ini` overrides are accepted only through the packer's `--boot-ini`
+argument and must never be included in a release image.
+
+## Project lineage and credits
+
+Perfect Dark X is a platform port, not a standalone reimplementation. The full
+desktop/Switch documentation and history remain available in the
+[upstream PC-port README](https://github.com/perfect-dark-pc-port/perfect_dark/blob/port/README.md).
+
+Major upstream foundations include:
+
+- the [Perfect Dark decompilation](https://github.com/n64decomp/perfect_dark)
+  contributors;
+- the [Perfect Dark PC port](https://github.com/perfect-dark-pc-port/perfect_dark)
+  contributors;
+- the sm64-port and libultraship Fast3D work credited by the upstream project;
+- [nxdk](https://github.com/XboxDev/nxdk), pbkit, and the XboxDev community;
+- [XEMU](https://xemu.app/) for development and qualification.
+
+See [LICENSE](LICENSE) for this repository's software license. Perfect Dark and
+its game assets belong to their respective rights holders; no affiliation or
+endorsement is implied.

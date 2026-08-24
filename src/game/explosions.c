@@ -26,6 +26,7 @@
 #include "lib/mtx.h"
 #include "lib/anim.h"
 #include "data.h"
+#include "gbiex.h"
 #include "types.h"
 
 #ifdef PLATFORM_N64
@@ -86,6 +87,8 @@ struct explosiontype g_ExplosionTypes[] = {
 	/*24*/ { 80,  60,  4,   1.4,  500,  200,  400,  90,  2, 5, SMOKETYPE_LARGE,        0x809f, 4     },
 	/*25*/ { 640, 480, 32,  11.2, 1600, 1000, 1000, 180, 2, 5, SMOKETYPE_NONE,         0x80a4, 4     },
 };
+
+extern struct texturepair g_TcExplosionTexturePairs[];
 
 bool explosionCreateSimple(struct prop *prop, struct coord *pos, RoomNum *rooms, s16 type, s32 playernum)
 {
@@ -1349,10 +1352,18 @@ Gfx *explosionRender(struct prop *prop, Gfx *gdl, bool xlupass)
 		gSPColor(gdl++, osVirtualToPhysical(colours), 1);
 
 		for (i = 14; i >= 0; i--) {
+#ifndef PLATFORM_N64
+			gDPSetTextureInfoEXT(gdl++, G_TEXTYPE_GENERAL, 0,
+					g_TcExplosionTexturePairs[i].texturenum1);
+#endif
 			gDPSetTextureImage(gdl++, G_IM_FMT_IA, G_IM_SIZ_16b, 1, g_ExplosionTexturePairs[i].texturenum1);
 			gDPLoadSync(gdl++);
 			gDPLoadBlock(gdl++, G_TX_LOADTILE, 0, 0, 1567, 0);
 
+#ifndef PLATFORM_N64
+			gDPSetTextureInfoEXT(gdl++, G_TEXTYPE_GENERAL, 0,
+					g_TcExplosionTexturePairs[i].texturenum2);
+#endif
 			gDPSetTextureImage(gdl++, G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, g_ExplosionTexturePairs[i].texturenum2);
 			gDPLoadSync(gdl++);
 			gDPLoadBlock(gdl++, 5, 0, 0, 223, 0);
