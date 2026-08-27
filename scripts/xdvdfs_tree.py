@@ -3,7 +3,7 @@
 xdvdfs_tree.py — XDVDFS image builder with nested directory support.
 
 pack-xiso.py's original builder only emits root-level files, which is fine for
-the ROM layout (default.xbe + pd.ntsc-final.z64 + pd.ini). The loose-file
+the ROM layout (default.xbe + pd.ntsc-final.z64). The loose-file
 layout needs real directories: files/ (with a bgdata/ subdirectory) and segs/.
 
 A directory entry's size depends only on its name length, so every directory

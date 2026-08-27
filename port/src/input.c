@@ -2,6 +2,8 @@
 #include <ctype.h>
 #include <stdio.h>
 #ifdef PLATFORM_XBOX
+#include <windows.h>
+#include <xboxkrnl/xboxkrnl.h>
 // strcasecmp provided by port/src/xbox/compat_xbox.c
 int strcasecmp(const char *a, const char *b);
 void serialPuts(const char *s);
@@ -14,6 +16,7 @@ void serialPuts(const char *s);
 #include "input.h"
 #include "video.h"
 #include "config.h"
+#include "audio.h"
 #include "utils.h"
 #include "system.h"
 #include "fs.h"
@@ -31,13 +34,203 @@ void serialPuts(const char *s);
 #define DEFAULT_DEADZONE 4096
 #define DEFAULT_DEADZONE_RY 6144
 
+static SDL_GameController *pads[INPUT_MAX_CONTROLLERS];
+
+#ifdef PLATFORM_XBOX
+/*
+ * The retail XBLA executable conditions every thumb axis in the same way:
+ * an axial +/-10000 deadzone followed by a linear conversion back to the N64
+ * stick's roughly +/-80 range. The scale below is the exact float stored at
+ * 0x82014348 in the retail XEX (bits 0x3b6648c1). Keep this baked into the Xbox
+ * build so controller feel does not depend on a user-editable configuration file.
+ */
+#define XBLA_STICK_DEADZONE 10000
+#define XBLA_STICK_SCALE 0.00351385795511f
+
+/*
+ * NKPatcher-style in-game reset. Perfect Dark X reads controllers through
+ * NXDK's SDL driver, bypassing the retail XInput path watched by softmod IGR
+ * hooks. Detect the physical Xbox controls here, before the game's remapping
+ * layer, so the combination remains available in every game state.
+ */
+static s32 xboxIgrLatched[INPUT_MAX_CONTROLLERS];
+static u32 xboxIgrLastMask[INPUT_MAX_CONTROLLERS];
+
+enum xboxigrcomponent {
+	XBOX_IGR_LT    = 1 << 0,
+	XBOX_IGR_RT    = 1 << 1,
+	XBOX_IGR_BACK  = 1 << 2,
+	XBOX_IGR_BLACK = 1 << 3,
+	XBOX_IGR_ALL   = XBOX_IGR_LT | XBOX_IGR_RT | XBOX_IGR_BACK | XBOX_IGR_BLACK,
+};
+
+static void inputXboxReturnToDashboard(void)
+{
+	const u32 launchPageSize = 0x1000;
+
+	if (!LaunchDataPage) {
+		LaunchDataPage = MmAllocateContiguousMemory(launchPageSize);
+	}
+
+	if (!LaunchDataPage) {
+		serialPuts("PDX_IGR launch-page allocation failed; full reboot fallback\n");
+		HalReturnToFirmware(HalRebootRoutine);
+	}
+
+	MmPersistContiguousMemory(LaunchDataPage, launchPageSize, TRUE);
+	memset((void *)LaunchDataPage, 0, launchPageSize);
+	LaunchDataPage->Header.dwLaunchDataType = LDT_LAUNCH_DASHBOARD;
+	LaunchDataPage->Header.dwTitleId =
+			CURRENT_XBE_HEADER->CertificateHeader->TitleID;
+	LaunchDataPage->Header.dwFlags = 0;
+
+	/*
+	 * The launch page must be committed to RAM before the quick reboot. XEMU's
+	 * coherent memory model hid this requirement, while real Xbox hardware can
+	 * otherwise enter firmware with stale launch-page cache lines and crash.
+	 */
+	__asm__ __volatile__("sfence" ::: "memory");
+	__asm__ __volatile__("wbinvd" ::: "memory");
+	HalReturnToFirmware(HalQuickRebootRoutine);
+}
+
+static inline u32 inputXboxIgrMask(const s32 idx, s32 *leftTrigger, s32 *rightTrigger)
+{
+#ifdef PD_XBOX_IGR_TEST
+	static u64 testStartedUs;
+	const u64 now = sysGetMicroseconds();
+
+	if (!testStartedUs) {
+		testStartedUs = now;
+		serialPuts("PDX_IGR TEST armed; synthetic combo begins in 4 seconds\n");
+		}
+
+	if (idx == 0 && now - testStartedUs >= 4000000
+			&& now - testStartedUs < 6000000) {
+		*leftTrigger = 32767;
+		*rightTrigger = 32767;
+		return XBOX_IGR_ALL;
+	}
+#endif
+
+	if (!pads[idx]) {
+		*leftTrigger = -32768;
+		*rightTrigger = -32768;
+		return 0;
+	}
+
+	/*
+	 * Use NXDK's fixed physical Original Xbox joystick layout instead of the
+	 * remappable SDL_GameController view. This keeps IGR independent of saved or
+	 * externally supplied controller mappings:
+	 *   axes 2/5 = LT/RT, buttons 6/5 = Back/Black.
+	 */
+	SDL_Joystick *joy = SDL_GameControllerGetJoystick(pads[idx]);
+	if (!joy) {
+		*leftTrigger = -32768;
+		*rightTrigger = -32768;
+		return 0;
+	}
+
+	*leftTrigger = SDL_JoystickGetAxis(joy, 2);
+	*rightTrigger = SDL_JoystickGetAxis(joy, 5);
+
+	u32 mask = 0;
+	if (*leftTrigger > TRIG_THRESHOLD) mask |= XBOX_IGR_LT;
+	if (*rightTrigger > TRIG_THRESHOLD) mask |= XBOX_IGR_RT;
+	if (SDL_JoystickGetButton(joy, 6)) mask |= XBOX_IGR_BACK;
+	if (SDL_JoystickGetButton(joy, 5)) mask |= XBOX_IGR_BLACK;
+	return mask;
+}
+
+static void inputXboxUpdateIgr(void)
+{
+	for (s32 idx = 0; idx < INPUT_MAX_CONTROLLERS; ++idx) {
+		s32 leftTrigger;
+		s32 rightTrigger;
+		const u32 mask = inputXboxIgrMask(idx, &leftTrigger, &rightTrigger);
+
+		if (mask != xboxIgrLastMask[idx]) {
+			if (mask) {
+				sysLogPrintf(LOG_WARNING,
+						"PDX_IGR input player=%d mask=%X lt=%d rt=%d back=%d black=%d",
+						idx + 1, (unsigned)mask, leftTrigger, rightTrigger,
+						(mask & XBOX_IGR_BACK) != 0, (mask & XBOX_IGR_BLACK) != 0);
+			}
+			xboxIgrLastMask[idx] = mask;
+		}
+
+		if (mask != XBOX_IGR_ALL) {
+			xboxIgrLatched[idx] = 0;
+			continue;
+		}
+
+		if (xboxIgrLatched[idx]) {
+			continue;
+		}
+
+		xboxIgrLatched[idx] = 1;
+		serialPuts("PDX_IGR dashboard quick reboot requested\n");
+		sysLogPrintf(LOG_WARNING,
+				"PDX_IGR: player %d pressed LT+RT+Back+Black; returning to dashboard",
+				idx + 1);
+		audioStopForDashboard();
+
+		for (s32 rumbleIdx = 0; rumbleIdx < INPUT_MAX_CONTROLLERS; ++rumbleIdx) {
+			if (pads[rumbleIdx]) {
+				SDL_GameControllerRumble(pads[rumbleIdx], 0, 0, 0);
+			}
+		}
+
+		inputXboxReturnToDashboard();
+	}
+}
+
+static inline s32 inputXboxAxisToN64(s32 x)
+{
+	if (x > XBLA_STICK_DEADZONE) {
+		return (s32)((f32)(x - XBLA_STICK_DEADZONE) * XBLA_STICK_SCALE);
+	}
+
+	if (x < -XBLA_STICK_DEADZONE) {
+		return (s32)((f32)(x + XBLA_STICK_DEADZONE) * XBLA_STICK_SCALE);
+	}
+
+	return 0;
+}
+
+static s32 inputXboxStickCurveSelfTest(void)
+{
+	static const struct {
+		s32 raw;
+		s32 expected;
+	} cases[] = {
+		{ -32768,  -80 },
+		{ -24576,  -51 },
+		{ -16384,  -22 },
+		{ -10000,    0 },
+		{      0,    0 },
+		{  10000,    0 },
+		{  16384,   22 },
+		{  24576,   51 },
+		{  32767,   80 },
+	};
+
+	for (u32 i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+		if (inputXboxAxisToN64(cases[i].raw) != cases[i].expected) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+#endif
+
 #define WHEEL_UP_MASK SDL_BUTTON(VK_MOUSE_WHEEL_UP - VK_MOUSE_BEGIN + 1)
 #define WHEEL_DN_MASK SDL_BUTTON(VK_MOUSE_WHEEL_DN - VK_MOUSE_BEGIN + 1)
 
 #define CURSOR_HIDE_THRESHOLD 1
 #define CURSOR_HIDE_TIME 3000000 // us
-
-static SDL_GameController *pads[INPUT_MAX_CONTROLLERS];
 
 #define CONTROLLERCFG_DEFAULT { \
 	.rumbleOn = 0, \
@@ -78,10 +271,79 @@ static s32 fakeControllers = 0;
 static s32 firstController = 0;
 static s32 connectedMask = 0;
 
+#ifdef PLATFORM_XBOX
+enum controllerharnessphase {
+	CONTROLLER_HARNESS_NEUTRAL,
+	CONTROLLER_HARNESS_SIGNATURES,
+	CONTROLLER_HARNESS_START_PULSES,
+	CONTROLLER_HARNESS_CONNECTED,
+	CONTROLLER_HARNESS_DISCONNECTED,
+	CONTROLLER_HARNESS_RECONNECTED,
+};
+
+static s32 controllerHarness = 0;
+static u64 controllerHarnessStartUs = 0;
+static s32 controllerHarnessLastPhase = -1;
+static u32 controllerHarnessSignaturesSeen = 0;
+static u32 controllerHarnessStartEdgesSeen = 0;
+static u32 controllerHarnessPressedApiSeen = 0;
+static s32 controllerHarnessSawAllConnected = 0;
+static s32 controllerHarnessSawDisconnect = 0;
+static s32 controllerHarnessSawReconnect = 0;
+static s32 controllerHarnessReported = 0;
+
+static s32 inputControllerHarnessPhase(void)
+{
+	const u64 elapsed = controllerHarnessStartUs
+			? sysGetMicroseconds() - controllerHarnessStartUs : 0;
+	s32 phase;
+
+	if (elapsed < 2000000) {
+		phase = CONTROLLER_HARNESS_NEUTRAL;
+	} else if (elapsed < 4000000) {
+		phase = CONTROLLER_HARNESS_SIGNATURES;
+	} else if (elapsed < 16000000) {
+		phase = CONTROLLER_HARNESS_START_PULSES;
+	} else if (elapsed < 22000000) {
+		phase = CONTROLLER_HARNESS_CONNECTED;
+	} else if (elapsed < 32000000) {
+		phase = CONTROLLER_HARNESS_DISCONNECTED;
+	} else {
+		phase = CONTROLLER_HARNESS_RECONNECTED;
+	}
+
+	if (phase != controllerHarnessLastPhase) {
+		static const char *names[] = {
+			"neutral", "signatures", "start-pulses", "connected",
+			"disconnect-p3", "reconnected-p3"
+		};
+		char msg[96];
+		snprintf(msg, sizeof(msg), "PDX_PADTEST phase=%s elapsed_ms=%lu\n",
+				names[phase], (unsigned long)(elapsed / 1000));
+		serialPuts(msg);
+		controllerHarnessLastPhase = phase;
+	}
+
+	return phase;
+}
+#endif
+
 static s32 numJoysticks = 0;
 
 static s32 useHIDAPI = 1;
 static s32 useRawInput = 0;
+
+static inline s32 inputEffectiveControllerMask(void)
+{
+#ifdef PLATFORM_XBOX
+	if (controllerHarness) {
+		return inputControllerHarnessPhase() == CONTROLLER_HARNESS_DISCONNECTED
+				? 0x0b : 0x0f;
+	}
+#endif
+	const s32 overrideMask = (1 << fakeControllers) - 1;
+	return overrideMask ? overrideMask : connectedMask;
+}
 
 #ifdef PLATFORM_XBOX
 // The Xbox has no mouse, and SDL_SetRelativeMouseMode() blocks under NXDK's
@@ -383,9 +645,14 @@ static inline void inputCloseController(const s32 cidx)
 	pads[cidx] = NULL;
 	padsCfg[cidx].rumbleOn = 0;
 
+#ifdef PLATFORM_XBOX
+	connectedMask &= ~(1 << cidx);
+#else
+	// Desktop builds keep slot 1 available for keyboard input.
 	if (cidx) {
 		connectedMask &= ~(1 << cidx);
 	}
+#endif
 }
 
 static inline s32 inputControllerGetIndex(SDL_GameController *ctrl)
@@ -431,7 +698,11 @@ static inline void inputCloseAllControllers(void)
 		}
 	}
 
-	connectedMask = 1; // always report first controller as connected
+#ifdef PLATFORM_XBOX
+	connectedMask = 0;
+#else
+	connectedMask = 1; // desktop keyboard is controller 1
+#endif
 }
 
 static inline s32 inputTryController(const s32 cidx, const s32 jidx)
@@ -452,7 +723,11 @@ static inline void inputInitAllControllers(void)
 
 	numJoysticks = SDL_NumJoysticks();
 
-	connectedMask = 1; // always report first controller as connected
+#ifdef PLATFORM_XBOX
+	connectedMask = 0;
+#else
+	connectedMask = 1; // desktop keyboard is controller 1
+#endif
 
 	// first try to assign the controllers that we had last time
 	// we're still free to check by device index before any controller device events fire
@@ -482,10 +757,6 @@ static inline void inputInitAllControllers(void)
 		}
 	}
 
-	const s32 overrideMask = (1 << fakeControllers) - 1;
-	if (overrideMask) {
-		connectedMask = overrideMask;
-	}
 }
 
 static int inputEventFilter(void *data, SDL_Event *event)
@@ -778,7 +1049,21 @@ s32 inputInit(void)
 
 	inputLoadBinds();
 
-	return connectedMask;
+#ifdef PLATFORM_XBOX
+	if (inputXboxStickCurveSelfTest()) {
+		serialPuts("PDX_STICKCURVE PASS profile=XBLA axial_deadzone=10000 scale_bits=3B6648C1 range=-80..80\n");
+	} else {
+		serialPuts("PDX_STICKCURVE FAIL profile=XBLA\n");
+	}
+
+	if (controllerHarness) {
+		controllerHarnessStartUs = sysGetMicroseconds();
+		controllerHarnessLastPhase = -1;
+		serialPuts("PDX_PADTEST BEGIN slots=4 mode=synthetic-game-layer\n");
+	}
+#endif
+
+	return inputEffectiveControllerMask();
 }
 
 static inline s32 inputBindPressed(const s32 idx, const u32 ck)
@@ -793,6 +1078,7 @@ static inline s32 inputBindPressed(const s32 idx, const u32 ck)
 	return 0;
 }
 
+#ifndef PLATFORM_XBOX
 static inline s32 inputAxisScale(s32 x, const s32 deadzone, const f32 scale)
 {
 	if (abs(x) < deadzone) {
@@ -810,6 +1096,7 @@ static inline s32 inputAxisScale(s32 x, const s32 deadzone, const f32 scale)
 		return (x > 32767) ? 32767 : ((x < -32768) ? -32768 : x);
 	}
 }
+#endif
 
 s32 inputReadController(s32 idx, OSContPad *npad)
 {
@@ -818,12 +1105,53 @@ s32 inputReadController(s32 idx, OSContPad *npad)
 	}
 
 	npad->button = 0;
+	npad->stick_x = 0;
+	npad->stick_y = 0;
+	npad->rstick_x = 0;
+	npad->rstick_y = 0;
+
+#ifdef PLATFORM_XBOX
+	if (controllerHarness) {
+		static const u16 signatureButtons[INPUT_MAX_CONTROLLERS] = {
+			A_BUTTON, B_BUTTON, Z_TRIG, R_TRIG
+		};
+		static const s8 signatureLeftX[INPUT_MAX_CONTROLLERS] = {
+			23, -31, 0, 0
+		};
+		static const s8 signatureLeftY[INPUT_MAX_CONTROLLERS] = {
+			0, 0, 41, -53
+		};
+		const s32 phase = inputControllerHarnessPhase();
+
+		if (phase == CONTROLLER_HARNESS_DISCONNECTED && idx == 2) {
+			return -1;
+		}
+
+		if (phase == CONTROLLER_HARNESS_SIGNATURES) {
+			npad->button = signatureButtons[idx];
+			npad->stick_x = signatureLeftX[idx];
+			npad->stick_y = signatureLeftY[idx];
+		} else if (phase == CONTROLLER_HARNESS_START_PULSES) {
+			const u64 elapsed = sysGetMicroseconds() - controllerHarnessStartUs;
+			const u32 pulseMs = (u32)((elapsed - 4000000) / 1000);
+			const s32 pulseSlot = (pulseMs / 700) % INPUT_MAX_CONTROLLERS;
+			if (idx == pulseSlot && pulseMs % 700 < 250) {
+				npad->button = START_BUTTON;
+			}
+		}
+
+		return 0;
+	}
+
+	// A missing Xbox pad must surface as an N64 controller read error. This
+	// drives the stock joy layer's connection-mask refresh and multiplayer
+	// join/reconnect UI. Qualification-only fake pads remain neutral successes.
+	if (!pads[idx] && !(inputEffectiveControllerMask() & (1 << idx))) {
+		return -1;
+	}
+#endif
 
 	if (textInput) {
-		npad->stick_x = 0;
-		npad->stick_y = 0;
-		npad->rstick_x = 0;
-		npad->rstick_y = 0;
 		return 0;
 	}
 
@@ -859,34 +1187,64 @@ s32 inputReadController(s32 idx, OSContPad *npad)
 	s32 rightX = SDL_GameControllerGetAxis(pads[idx], cfg->axisMap[1][0]);
 	s32 rightY = SDL_GameControllerGetAxis(pads[idx], cfg->axisMap[1][1]);
 
+#ifdef PLATFORM_XBOX
+	leftX = inputXboxAxisToN64(leftX);
+	leftY = inputXboxAxisToN64(leftY);
+	rightX = inputXboxAxisToN64(rightX);
+	rightY = inputXboxAxisToN64(rightY);
+#else
 	leftX = inputAxisScale(leftX, cfg->deadzone[cfg->axisMap[0][0]], cfg->sens[cfg->axisMap[0][0]]);
 	leftY = inputAxisScale(leftY, cfg->deadzone[cfg->axisMap[0][1]], cfg->sens[cfg->axisMap[0][1]]);
 	rightX = inputAxisScale(rightX, cfg->deadzone[cfg->axisMap[1][0]], cfg->sens[cfg->axisMap[1][0]]);
 	rightY = inputAxisScale(rightY, cfg->deadzone[cfg->axisMap[1][1]], cfg->sens[cfg->axisMap[1][1]]);
+#endif
 
 	if (!npad->stick_x && leftX) {
+	#ifdef PLATFORM_XBOX
+		npad->stick_x = leftX;
+	#else
 		npad->stick_x = leftX / 0x100;
+	#endif
 	}
 
+	#ifdef PLATFORM_XBOX
+	s32 stickY = -leftY;
+	#else
 	s32 stickY = -leftY / 0x100;
+	#endif
 	if (!npad->stick_y && stickY) {
 		npad->stick_y = (stickY == 128) ? 127 : stickY;
 	}
 
 	if (cfg->stickCButtons) {
 		// rstick emulates C buttons
+	#ifdef PLATFORM_XBOX
+		if (rightX < -64) npad->button |= L_CBUTTONS;
+		if (rightX > +64) npad->button |= R_CBUTTONS;
+		if (rightY < -64) npad->button |= U_CBUTTONS;
+		if (rightY > +64) npad->button |= D_CBUTTONS;
+	#else
 		if (rightX < -0x4000) npad->button |= L_CBUTTONS;
 		if (rightX > +0x4000) npad->button |= R_CBUTTONS;
 		if (rightY < -0x4000) npad->button |= U_CBUTTONS;
 		if (rightY > +0x4000) npad->button |= D_CBUTTONS;
+	#endif
 		npad->rstick_x = 0;
 		npad->rstick_y = 0;
 	} else {
 		// rstick is an analog input
 		if (rightX) {
+		#ifdef PLATFORM_XBOX
+			npad->rstick_x = rightX;
+		#else
 			npad->rstick_x = rightX / 0x100;
+		#endif
 		}
+	#ifdef PLATFORM_XBOX
+		s32 rStickY = -rightY;
+	#else
 		s32 rStickY = -rightY / 0x100;
+	#endif
 		if (rStickY) {
 			npad->rstick_y = (rStickY == 128) ? 127 : rStickY;
 		}
@@ -894,27 +1252,30 @@ s32 inputReadController(s32 idx, OSContPad *npad)
 
 #ifdef PLATFORM_XBOX
 	// Transition-only telemetry lets the repo-local XEMU harness prove that
-	// the emulated Xbox controller reached the N64 pad state used by the game.
-	if (idx == 0) {
-		static s32 havePrevious = 0;
-		static u32 previousButtons;
-		static s32 previousX, previousY, previousRX, previousRY;
-		if (!havePrevious || previousButtons != npad->button ||
-				previousX != npad->stick_x || previousY != npad->stick_y ||
-				previousRX != npad->rstick_x || previousRY != npad->rstick_y) {
+	// each emulated Xbox controller reached its own N64 pad slot.
+	{
+		static s32 havePrevious[INPUT_MAX_CONTROLLERS] = { 0 };
+		static u32 previousButtons[INPUT_MAX_CONTROLLERS];
+		static s32 previousX[INPUT_MAX_CONTROLLERS];
+		static s32 previousY[INPUT_MAX_CONTROLLERS];
+		static s32 previousRX[INPUT_MAX_CONTROLLERS];
+		static s32 previousRY[INPUT_MAX_CONTROLLERS];
+		if (!havePrevious[idx] || previousButtons[idx] != npad->button ||
+				previousX[idx] != npad->stick_x || previousY[idx] != npad->stick_y ||
+				previousRX[idx] != npad->rstick_x || previousRY[idx] != npad->rstick_y) {
 			char msg[112];
 			snprintf(msg, sizeof(msg),
-					"input: p0 buttons=%04X left=%d,%d right=%d,%d\n",
-					(unsigned)npad->button, (int)npad->stick_x,
+					"input: p%d buttons=%04X left=%d,%d right=%d,%d\n",
+					(int)idx, (unsigned)npad->button, (int)npad->stick_x,
 					(int)npad->stick_y, (int)npad->rstick_x,
 					(int)npad->rstick_y);
 			serialPuts(msg);
-			previousButtons = npad->button;
-			previousX = npad->stick_x;
-			previousY = npad->stick_y;
-			previousRX = npad->rstick_x;
-			previousRY = npad->rstick_y;
-			havePrevious = 1;
+			previousButtons[idx] = npad->button;
+			previousX[idx] = npad->stick_x;
+			previousY[idx] = npad->stick_y;
+			previousRX[idx] = npad->rstick_x;
+			previousRY[idx] = npad->rstick_y;
+			havePrevious[idx] = 1;
 		}
 	}
 #endif
@@ -966,7 +1327,13 @@ static inline void inputUpdateMouse(void)
 
 void inputUpdate(void)
 {
+	// SDL's event watch only sees hot-plug events once the queue is pumped.
+	SDL_PumpEvents();
 	SDL_GameControllerUpdate();
+
+#ifdef PLATFORM_XBOX
+	inputXboxUpdateIgr();
+#endif
 
 	if (mouseEnabled) {
 		inputUpdateMouse();
@@ -978,7 +1345,7 @@ s32 inputControllerConnected(s32 idx)
 	if (idx < 0 || idx >= INPUT_MAX_CONTROLLERS) {
 		return 0;
 	}
-	return pads[idx] || (connectedMask & (1 << idx));
+	return (inputEffectiveControllerMask() & (1 << idx)) != 0;
 }
 
 s32 inputRumbleSupported(s32 idx)
@@ -1024,8 +1391,133 @@ void inputRumbleSetStrength(s32 cidx, f32 val)
 
 s32 inputControllerMask(void)
 {
-	return connectedMask;
+	return inputEffectiveControllerMask();
 }
+
+#ifdef PLATFORM_XBOX
+s32 inputControllerHarnessEnabled(void)
+{
+	return controllerHarness;
+}
+
+void inputControllerHarnessObservePressedApi(s32 idx, u32 buttons)
+{
+	if (!controllerHarness || idx < 0 || idx >= INPUT_MAX_CONTROLLERS) {
+		return;
+	}
+
+	if (buttons & START_BUTTON) {
+		const u32 bit = 1U << idx;
+		if (!(controllerHarnessPressedApiSeen & bit)) {
+			char msg[80];
+			controllerHarnessPressedApiSeen |= bit;
+			snprintf(msg, sizeof(msg),
+					"PDX_PADTEST pressed-api PASS slot=%d start=1\n", (int)(idx + 1));
+			serialPuts(msg);
+		}
+	}
+}
+
+void inputControllerHarnessObserveJoy(const OSContPad *pads, const u32 *buttonsPressed,
+		u32 joyConnectedMask)
+{
+	static const u16 signatureButtons[INPUT_MAX_CONTROLLERS] = {
+		A_BUTTON, B_BUTTON, Z_TRIG, R_TRIG
+	};
+	static const s8 signatureLeftX[INPUT_MAX_CONTROLLERS] = {
+		23, -31, 0, 0
+	};
+	static const s8 signatureLeftY[INPUT_MAX_CONTROLLERS] = {
+		0, 0, 41, -53
+	};
+	u64 elapsed;
+	s32 phase;
+	s32 i;
+
+	if (!controllerHarness || !pads || !buttonsPressed) {
+		return;
+	}
+
+	elapsed = sysGetMicroseconds() - controllerHarnessStartUs;
+	phase = inputControllerHarnessPhase();
+
+	if (joyConnectedMask == 0x0f && phase < CONTROLLER_HARNESS_DISCONNECTED) {
+		controllerHarnessSawAllConnected = 1;
+	}
+
+	if (phase == CONTROLLER_HARNESS_SIGNATURES) {
+		for (i = 0; i < INPUT_MAX_CONTROLLERS; ++i) {
+			if (pads[i].errnum == 0
+					&& pads[i].button == signatureButtons[i]
+					&& pads[i].stick_x == signatureLeftX[i]
+					&& pads[i].stick_y == signatureLeftY[i]) {
+				controllerHarnessSignaturesSeen |= 1U << i;
+			}
+		}
+	}
+
+	for (i = 0; i < INPUT_MAX_CONTROLLERS; ++i) {
+		if (buttonsPressed[i] & START_BUTTON) {
+			const u32 bit = 1U << i;
+			if (!(controllerHarnessStartEdgesSeen & bit)) {
+				char msg[80];
+				controllerHarnessStartEdgesSeen |= bit;
+				snprintf(msg, sizeof(msg),
+						"PDX_PADTEST joy-edge PASS slot=%d start=1\n", (int)(i + 1));
+				serialPuts(msg);
+			}
+		}
+	}
+
+	if (phase == CONTROLLER_HARNESS_DISCONNECTED
+			&& joyConnectedMask == 0x0b && pads[2].errnum != 0) {
+		if (!controllerHarnessSawDisconnect) {
+			serialPuts("PDX_PADTEST disconnect PASS slot=3 mask=0B err=NO_RESPONSE\n");
+		}
+		controllerHarnessSawDisconnect = 1;
+	}
+
+	if (phase == CONTROLLER_HARNESS_RECONNECTED
+			&& controllerHarnessSawDisconnect
+			&& joyConnectedMask == 0x0f && pads[2].errnum == 0) {
+		if (!controllerHarnessSawReconnect) {
+			serialPuts("PDX_PADTEST reconnect PASS slot=3 mask=0F err=0\n");
+		}
+		controllerHarnessSawReconnect = 1;
+	}
+
+	if (phase == CONTROLLER_HARNESS_RECONNECTED && !controllerHarnessReported) {
+		const s32 passed = controllerHarnessSignaturesSeen == 0x0f
+				&& controllerHarnessStartEdgesSeen == 0x0f
+				&& controllerHarnessPressedApiSeen == 0x0f
+				&& controllerHarnessSawAllConnected
+				&& controllerHarnessSawDisconnect
+				&& controllerHarnessSawReconnect;
+		char msg[192];
+
+		if (passed) {
+			snprintf(msg, sizeof(msg),
+					"PDX_PADTEST COMPLETE result=PASS signatures=%02lX start_edges=%02lX pressed_api=%02lX masks=0F-0B-0F\n",
+					(unsigned long)controllerHarnessSignaturesSeen,
+					(unsigned long)controllerHarnessStartEdgesSeen,
+					(unsigned long)controllerHarnessPressedApiSeen);
+		} else if (elapsed >= 36000000) {
+			snprintf(msg, sizeof(msg),
+					"PDX_PADTEST COMPLETE result=FAIL signatures=%02lX start_edges=%02lX pressed_api=%02lX masks=%d%d%d\n",
+					(unsigned long)controllerHarnessSignaturesSeen,
+					(unsigned long)controllerHarnessStartEdgesSeen,
+					(unsigned long)controllerHarnessPressedApiSeen,
+					controllerHarnessSawAllConnected,
+					controllerHarnessSawDisconnect,
+					controllerHarnessSawReconnect);
+		} else {
+			return;
+		}
+		serialPuts(msg);
+		controllerHarnessReported = 1;
+	}
+}
+#endif
 
 s32 inputControllerGetSticksSwapped(s32 cidx)
 {
@@ -1568,6 +2060,9 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
 	configRegisterFloat("Input.MouseSpeedX", &mouseSensX, -30.f, 30.f);
 	configRegisterFloat("Input.MouseSpeedY", &mouseSensY, -30.f, 30.f);
 	configRegisterInt("Input.FakeGamepads", &fakeControllers, 0, 4);
+#ifdef PLATFORM_XBOX
+	configRegisterInt("Input.ControllerHarness", &controllerHarness, 0, 1);
+#endif
 	configRegisterInt("Input.FirstGamepadNum", &firstController, 0, 3);
 	configRegisterInt("Input.UseHIDAPI", &useHIDAPI, 0, 1);
 	configRegisterInt("Input.UseRawInput", &useRawInput, 0, 1);

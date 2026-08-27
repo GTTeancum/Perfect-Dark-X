@@ -17,6 +17,10 @@
 #define PDTX_MAX_DIMENSION 512u
 #define PDTX_MAX_RAW_SIZE (PDTX_MAX_DIMENSION * PDTX_MAX_DIMENSION * 4u)
 
+int g_XboxExtTextureUploadTrace;
+int g_XboxExtTextureUploadActive;
+uint32_t g_XboxExtTextureUploadId = UINT32_MAX;
+
 struct pdtx_entry {
 	u32 offset;
 	u32 compressed_size;
@@ -30,6 +34,7 @@ static struct pdtx_entry *g_PdtxEntries;
 static u32 g_PdtxEntryCount;
 static s32 g_PdtxInitAttempted;
 static s32 g_PdtxReportedFirstLoad;
+static s32 g_PdtxTracedFirstLoad;
 static u8 g_PdtxReportedLarge[8192 / 8];
 
 static u16 readLe16(const u8 *src)
@@ -165,15 +170,30 @@ uint8_t *xboxExtTextureLoad(uint32_t texture_id, uint32_t *width, uint32_t *heig
 	u8 *pixels;
 	z_stream stream;
 	s32 ret;
+	s32 trace;
 
 	if (!xboxExtTextureGetInfo(texture_id, width, height)) {
 		return NULL;
 	}
 
 	entry = &g_PdtxEntries[texture_id];
+	trace = !g_PdtxTracedFirstLoad;
+	if (trace) {
+		g_PdtxTracedFirstLoad = 1;
+		sysLogPrintf(LOG_NOTE,
+				"PDTX HWTRACE 1 load %04lx %ux%u compressed=%lu raw=%lu offset=%lu",
+				(unsigned long)texture_id, entry->width, entry->height,
+				(unsigned long)entry->compressed_size,
+				(unsigned long)entry->raw_size,
+				(unsigned long)entry->offset);
+	}
 
 	compressed = malloc(entry->compressed_size);
 	pixels = malloc(entry->raw_size);
+	if (trace) {
+		sysLogPrintf(LOG_NOTE, "PDTX HWTRACE 2 buffers compressed=%p pixels=%p",
+				compressed, pixels);
+	}
 
 	if (!compressed || !pixels) {
 		sysLogPrintf(LOG_ERROR, "texture pack: allocation failed for %04lx",
@@ -191,6 +211,9 @@ uint8_t *xboxExtTextureLoad(uint32_t texture_id, uint32_t *width, uint32_t *heig
 		free(pixels);
 		return NULL;
 	}
+	if (trace) {
+		sysLogPrintf(LOG_NOTE, "PDTX HWTRACE 3 archive read complete");
+	}
 
 	memset(&stream, 0, sizeof(stream));
 	stream.next_in = compressed;
@@ -200,9 +223,16 @@ uint8_t *xboxExtTextureLoad(uint32_t texture_id, uint32_t *width, uint32_t *heig
 	stream.zalloc = pdtxZalloc;
 	stream.zfree = pdtxZfree;
 	ret = inflateInit2(&stream, 15);
+	if (trace) {
+		sysLogPrintf(LOG_NOTE, "PDTX HWTRACE 4 inflateInit2=%d", ret);
+	}
 
 	if (ret == Z_OK) {
 		ret = inflate(&stream, Z_FINISH);
+		if (trace) {
+			sysLogPrintf(LOG_NOTE, "PDTX HWTRACE 5 inflate=%d out=%lu",
+					ret, (unsigned long)stream.total_out);
+		}
 		inflateEnd(&stream);
 	}
 
@@ -218,6 +248,7 @@ uint8_t *xboxExtTextureLoad(uint32_t texture_id, uint32_t *width, uint32_t *heig
 
 	if (!g_PdtxReportedFirstLoad) {
 		g_PdtxReportedFirstLoad = 1;
+		sysLogPrintf(LOG_NOTE, "PDTX HWTRACE 6 first diffuse ready");
 		serialPuts("PDTX: first diffuse loaded\n");
 	}
 	if ((entry->width >= 512 || entry->height >= 512)
@@ -247,5 +278,6 @@ void xboxExtTextureShutdown(void)
 	g_PdtxEntries = NULL;
 	g_PdtxEntryCount = 0;
 	g_PdtxReportedFirstLoad = 0;
+	g_PdtxTracedFirstLoad = 0;
 	memset(g_PdtxReportedLarge, 0, sizeof(g_PdtxReportedLarge));
 }

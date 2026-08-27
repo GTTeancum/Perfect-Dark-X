@@ -302,30 +302,6 @@ def validate_rom(path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Default pd.ini written to disc
-# ---------------------------------------------------------------------------
-
-_PD_INI = (
-    b"[Game]\n"
-    b"SkipIntro = 1\n"
-    # 12 MB game heap = 4 MB onboard + 8 MB expansion stage pool.  MUST be > 8 MB
-    # (MEMP_EXPANSION_POOL_SIZE): at exactly 8 MB mempSetHeap never creates the
-    # expansion stage pool, but IS8MB mode routes stage allocs to it -> NULL ->
-    # crash in lvReset.  Keep in sync with g_OsMemSizeMb in main_xbox.c.
-    b"MemorySize = 16\n"
-    b"\n"
-    b"[Video]\n"
-    b"DefaultFullscreen = 1\n"
-    b"VSync = 1\n"
-    b"FramerateLimit = 60\n"
-    b"DisplayFPS = 0\n"
-    b"\n"
-    b"[Audio]\n"
-    b"BufferSize = 512\n"
-)
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -361,7 +337,6 @@ def main() -> None:
     disc_files = [
         ('default.xbe', args.xbe),
         (rom_disc_name, args.rom),
-        ('pd.ini',      _PD_INI),
     ]
 
     if args.gbc:

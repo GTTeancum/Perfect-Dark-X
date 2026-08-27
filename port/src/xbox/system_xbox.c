@@ -36,6 +36,8 @@ static ULONGLONG qpc(void)
 #define LOG_FNAME "D:\\pd.log"
 
 static char logPath[512];
+static FILE *logFile;
+static u32 logLinesSinceFlush;
 
 // ── Arg stubs (no command-line on Xbox) ─────────────────────────────────────
 
@@ -73,14 +75,18 @@ void sysInit(void)
 
     // Open log on D:\ (game media / USB drive)
     snprintf(logPath, sizeof(logPath), LOG_FNAME);
-    FILE *f = fopen(logPath, "wb");
-    if (f) {
-        fclose(f);
-    } else {
+    logFile = fopen(logPath, "wb");
+    if (!logFile) {
         // Fallback: T:\ is always writable
         snprintf(logPath, sizeof(logPath), "T:\\pd.log");
-        f = fopen(logPath, "wb");
-        if (f) fclose(f);
+        logFile = fopen(logPath, "wb");
+    }
+    if (logFile) {
+        // Keep the file open. Reopening and closing pd.log for every routine
+        // asset-load message causes visible stalls during stage transitions.
+        // A small full buffer coalesces those writes; critical renderer and
+        // error messages are flushed immediately below.
+        setvbuf(logFile, NULL, _IOFBF, 16 * 1024);
     }
 
     sysLogPrintf(LOG_NOTE, "Xbox system initialised");
@@ -99,7 +105,7 @@ u64 sysGetMicroseconds(void)
 
 s32 sysLogIsOpen(void)
 {
-    return (logPath[0] != '\0');
+    return logFile != NULL;
 }
 
 void sysLogPrintf(s32 level, const char *fmt, ...)
@@ -112,20 +118,36 @@ void sysLogPrintf(s32 level, const char *fmt, ...)
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    // Write to log file
-    if (logPath[0]) {
-        FILE *f = fopen(logPath, "ab");
-        if (f) {
-            fprintf(f, "%s%s\n", prefix[level], msg);
-            fclose(f);
+    const s32 urgent = level != LOG_NOTE
+        || strstr(msg, "NV2A HWTRACE") != NULL
+        || strstr(msg, "NV2A TRACE BUILD") != NULL
+        || strstr(msg, "NV2A SHADER ABI") != NULL
+        || strstr(msg, "NV2A TEXPROOF") != NULL
+        || strstr(msg, "NV2A PERF") != NULL
+        || strstr(msg, "NV2A TIMEOUT") != NULL
+        || strstr(msg, "NV2A TEX INVALID") != NULL
+        || strstr(msg, "PDTX HWTRACE") != NULL
+        || strstr(msg, "PDTX PERF") != NULL
+        || strstr(msg, "loading:") != NULL
+        || strstr(msg, "PHASE") != NULL;
+
+    if (logFile) {
+        fprintf(logFile, "%s%s\n", prefix[level], msg);
+        ++logLinesSinceFlush;
+        if (urgent || logLinesSinceFlush >= 64) {
+            fflush(logFile);
+            logLinesSinceFlush = 0;
         }
     }
 
-    // Also print to NXDK debug output (visible via serial / debugger)
-    debugPrint("%s%s\n", prefix[level], msg);
-    serialPuts(prefix[level]);
-    serialPuts(msg);
-    serialPutc('\n');
+    // debugPrint writes into the HAL framebuffer and must not run after pbkit
+    // owns the display. Keep only high-value messages on COM1; routine loose-
+    // file chatter belongs in the buffered on-disk log.
+    if (urgent) {
+        serialPuts(prefix[level]);
+        serialPuts(msg);
+        serialPutc('\n');
+    }
 }
 
 void sysFatalError(const char *fmt, ...)

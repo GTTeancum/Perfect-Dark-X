@@ -8,5 +8,8 @@ s32 audioGetBytesBuffered(void);
 s32 audioGetSamplesBuffered(void);
 void audioSetNextBuffer(const s16 *buf, u32 len);
 void audioEndFrame(void);
+void audioBeginStageTransition(s32 fromStage, s32 toStage);
+void audioEndStageTransition(s32 stage);
+void audioStopForDashboard(void);
 
 #endif

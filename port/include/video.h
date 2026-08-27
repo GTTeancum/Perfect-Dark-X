@@ -22,6 +22,12 @@ void videoSubmitCommands(Gfx *cmds);
 void videoClearScreen(void);
 void videoEndFrame(void);
 
+// Cooperative loading activity. The Xbox backend presents a small animated
+// wheel during synchronous stage loads; other platforms keep these as no-ops.
+void videoBeginLoadingActivity(s32 fromStage, s32 toStage);
+void videoPulseLoadingActivity(void);
+void videoEndLoadingActivity(s32 stage);
+
 void *videoGetWindowHandle(void);
 
 void videoUpdateNativeResolution(s32 w, s32 h);

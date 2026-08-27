@@ -47,6 +47,7 @@
 #include "game/music.h"
 #include "game/nbomb.h"
 #include "game/objectives.h"
+#include "game/options.h"
 #include "game/pak.h"
 #include "game/pdmode.h"
 #include "game/player.h"
@@ -99,6 +100,10 @@
 #ifndef PLATFORM_N64
 #include "video.h"
 #endif
+#ifdef PLATFORM_XBOX
+#include "input.h"
+#include "system.h"
+#endif
 
 struct sndstate *g_MiscSfxAudioHandles[3];
 u32 var800aa5bc;
@@ -106,6 +111,11 @@ s32 g_MiscSfxActiveTypes[3];
 
 u32 var80084010 = 0;
 bool var80084014 = false;
+#ifdef PLATFORM_XBOX
+static bool g_XboxControllerDisconnectPause = false;
+static u32 g_XboxDisconnectedPlayerMask = 0;
+static s32 g_XboxDisconnectPauseStart60 = 0;
+#endif
 f32 var80084018 = 1;
 u32 var8008401c = 0x00000001;
 
@@ -243,6 +253,11 @@ void lvReset(s32 stagenum)
 
 	var80084014 = false;
 	var80084010 = 0;
+#ifdef PLATFORM_XBOX
+	g_XboxControllerDisconnectPause = false;
+	g_XboxDisconnectedPlayerMask = 0;
+	g_XboxDisconnectPauseStart60 = 0;
+#endif
 
 #if VERSION >= VERSION_NTSC_1_0
 	PD_DBGMARK(401);
@@ -2151,6 +2166,73 @@ void lvTick(void)
 	PD_DBGMARK(500);
 	lvCheckPauseStateChanged();
 
+#ifdef PLATFORM_XBOX
+	{
+		u32 disconnectedPlayers = 0;
+		u32 connectedControllers = joyGetConnectedControllers();
+
+		if (g_Vars.stagenum < STAGE_TITLE) {
+			for (j = 0; j < PLAYERCOUNT(); ++j) {
+				s32 mpindex = g_Vars.playerstats[j].mpindex;
+				s32 controlmode;
+				s32 contpad1;
+				s32 contpad2;
+
+				if (!g_Vars.players[j] || mpindex < 0 || mpindex >= MAX_MPPLAYERCONFIGS) {
+					continue;
+				}
+
+				controlmode = optionsGetControlMode(mpindex);
+				contpad1 = optionsGetContpadNum1(mpindex);
+				contpad2 = optionsGetContpadNum2(mpindex);
+
+				if (contpad1 < 0 || contpad1 >= MAXCONTROLLERS
+						|| !(connectedControllers & (1U << contpad1))) {
+					disconnectedPlayers |= 1U << j;
+				}
+
+				if (controlmode >= CONTROLMODE_21 && controlmode <= CONTROLMODE_24
+						&& (contpad2 < 0 || contpad2 >= MAXCONTROLLERS
+								|| !(connectedControllers & (1U << contpad2)))) {
+					disconnectedPlayers |= 1U << j;
+				}
+			}
+		}
+
+		g_XboxDisconnectedPlayerMask = disconnectedPlayers;
+
+		if (disconnectedPlayers && !g_XboxControllerDisconnectPause) {
+			g_XboxControllerDisconnectPause = true;
+			g_XboxDisconnectPauseStart60 = g_StageTimeElapsed60;
+			pakDisableRumbleForAllPlayers();
+			snd0000fe20();
+			sysLogPrintf(LOG_NOTE,
+					"controller disconnect pause: active players=%02x stage60=%d",
+					(unsigned)disconnectedPlayers, g_XboxDisconnectPauseStart60);
+		} else if (!disconnectedPlayers && g_XboxControllerDisconnectPause) {
+			s32 end60 = g_StageTimeElapsed60;
+			g_XboxControllerDisconnectPause = false;
+
+			if (!var80084014 && !mpIsPaused()) {
+				snd0000fe50();
+				pakEnableRumbleForAllPlayers();
+			}
+
+			sysLogPrintf(LOG_NOTE,
+					"controller disconnect pause: cleared stage60=%d delta=%d",
+					end60, end60 - g_XboxDisconnectPauseStart60);
+
+			if (inputControllerHarnessEnabled()) {
+				sysLogPrintf(end60 == g_XboxDisconnectPauseStart60 ? LOG_NOTE : LOG_ERROR,
+						"PDX_PADPAUSE COMPLETE result=%s start60=%d end60=%d delta=%d",
+						end60 == g_XboxDisconnectPauseStart60 ? "PASS" : "FAIL",
+						g_XboxDisconnectPauseStart60, end60,
+						end60 - g_XboxDisconnectPauseStart60);
+			}
+		}
+	}
+#endif
+
 #if VERSION >= VERSION_NTSC_1_0
 	if (g_Vars.pakstocheck) {
 		PD_DBGMARK(501);
@@ -2686,8 +2768,15 @@ void lvSetPaused(bool paused)
 		pakDisableRumbleForAllPlayers();
 		snd0000fe20();
 	} else {
+#ifdef PLATFORM_XBOX
+		if (!g_XboxControllerDisconnectPause) {
+			snd0000fe50();
+			pakEnableRumbleForAllPlayers();
+		}
+#else
 		snd0000fe50();
 		pakEnableRumbleForAllPlayers();
+#endif
 	}
 
 	var80084014 = paused;
@@ -2695,8 +2784,19 @@ void lvSetPaused(bool paused)
 
 bool lvIsPaused(void)
 {
+#ifdef PLATFORM_XBOX
+	return var80084014 || g_XboxControllerDisconnectPause;
+#else
 	return var80084014;
+#endif
 }
+
+#ifdef PLATFORM_XBOX
+u32 lvGetDisconnectedPlayerMask(void)
+{
+	return g_XboxDisconnectedPlayerMask;
+}
+#endif
 
 s32 lvGetDifficulty(void)
 {

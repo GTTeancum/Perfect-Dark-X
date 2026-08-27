@@ -6,6 +6,9 @@
 #include "lib/joy.h"
 #include "data.h"
 #include "types.h"
+#ifdef PLATFORM_XBOX
+#include "input.h"
+#endif
 
 /**
  * PD polls the controllers from the scheduler's thread. The scheduler polls the
@@ -484,6 +487,13 @@ void joyConsumeSamples(struct joydata *joydata)
 			}
 		}
 	}
+
+#ifdef PLATFORM_XBOX
+	if (joydata == &g_JoyData[0] && joydata->curlast != joydata->curstart) {
+		inputControllerHarnessObserveJoy(joydata->samples[joydata->curlast].pads,
+				joydata->buttonspressed, g_JoyConnectedControllers);
+	}
+#endif
 }
 
 #if VERSION < VERSION_NTSC_1_0
@@ -608,6 +618,16 @@ void joyReadData(void)
 	}
 
 	osContGetReadData(g_JoyData[0].samples[index].pads);
+
+#ifdef PLATFORM_XBOX
+	// The desktop scheduler shim does not reproduce the N64 controller-query
+	// interrupt cadence. Synchronize the stock joy mask from the backend on the
+	// same read that observed a hot-plug transition so join and reconnect UI see
+	// detach/reattach immediately.
+	if (g_JoyConnectedControllers != inputControllerMask()) {
+		joy00013e84();
+	}
+#endif
 
 	g_JoyData[0].nextlast = index;
 	g_JoyData[0].nextsecondlast = (g_JoyData[0].nextlast + NUM_SAMPLES - 1) % NUM_SAMPLES;
@@ -977,7 +997,13 @@ u32 joyGetButtonsPressedThisFrame(s8 contpadnum, u32 mask)
 		return 0;
 	}
 
-	return g_JoyDataPtr->buttonspressed[contpadnum] & mask;
+	{
+		u32 buttons = g_JoyDataPtr->buttonspressed[contpadnum] & mask;
+#ifdef PLATFORM_XBOX
+		inputControllerHarnessObservePressedApi(contpadnum, buttons);
+#endif
+		return buttons;
+	}
 }
 
 #if VERSION < VERSION_NTSC_1_0

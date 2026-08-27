@@ -18,6 +18,7 @@
 #include "platform.h"
 #include "utils.h"
 #include "fs.h"
+#include "video.h"
 #ifdef PLATFORM_XBOX
 #include <windows.h>
 #endif
@@ -133,6 +134,28 @@ const char *fsFullPath(const char *relPath)
 
 #ifdef PLATFORM_XBOX
 static void xboxMakeDirs(const char *abs);
+
+static void xboxInstallDashboardMetadata(void)
+{
+	static const char *names[] = {
+		"TitleMeta.xbx",
+		"TitleImage.xbx",
+		"SaveImage.xbx",
+	};
+
+	for (u32 i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+		char source[FS_MAXPATH + 1];
+		char destination[FS_MAXPATH + 1];
+		snprintf(source, sizeof(source), "D:\\%s", names[i]);
+		snprintf(destination, sizeof(destination), "%s\\%s", saveDir, names[i]);
+		if (!CopyFileA(source, destination, FALSE)) {
+			sysLogPrintf(LOG_ERROR, "dashboard metadata copy failed: %s -> %s error=%lu",
+					source, destination, (unsigned long)GetLastError());
+		} else {
+			sysLogPrintf(LOG_NOTE, "dashboard metadata installed: %s", destination);
+		}
+	}
+}
 #endif
 
 s32 fsInit(void)
@@ -169,10 +192,12 @@ s32 fsInit(void)
 		}
 	}
 
-	strncpy(saveDir, "E:\\TDATA\\PerfectDarkX", FS_MAXPATH);
+	const u32 titleId = CURRENT_XBE_HEADER->CertificateHeader->TitleID;
+	snprintf(saveDir, FS_MAXPATH, "E:\\UDATA\\%08X", (unsigned)titleId);
 	xboxMakeDirs(saveDir);
+	xboxInstallDashboardMetadata();
 	sysLogPrintf(LOG_NOTE, "base dir: %s", baseDir);
-	sysLogPrintf(LOG_NOTE, "save dir: %s", saveDir);
+	sysLogPrintf(LOG_NOTE, "save dir: %s (title id 0x%08X)", saveDir, (unsigned)titleId);
 	return 0;
 #else
 	sysGetExecutablePath(exeDir, FS_MAXPATH);
@@ -292,7 +317,18 @@ s32 fsFileLoadTo(const char *name, void *dst, u32 dstSize)
 		return -1;
 	}
 
-	fread(dst, 1, size, f);
+	u32 loaded = 0;
+	while (loaded < (u32)size) {
+		const u32 remaining = (u32)size - loaded;
+		const u32 chunk = remaining > 65536u ? 65536u : remaining;
+		const size_t got = fread((u8 *)dst + loaded, 1, chunk, f);
+		loaded += (u32)got;
+		videoPulseLoadingActivity();
+		if (got != chunk) {
+			fclose(f);
+			return -1;
+		}
+	}
 	fclose(f);
 
 	return size;
@@ -326,7 +362,21 @@ void *fsFileLoad(const char *name, u32 *outSize)
 			fclose(f);
 			return NULL;
 		}
-		fread(buf, 1, size, f);
+		u32 loaded = 0;
+		while (loaded < (u32)size) {
+			const u32 remaining = (u32)size - loaded;
+			const u32 chunk = remaining > 65536u ? 65536u : remaining;
+			const size_t got = fread((u8 *)buf + loaded, 1, chunk, f);
+			loaded += (u32)got;
+			videoPulseLoadingActivity();
+			if (got != chunk) {
+				sysLogPrintf(LOG_ERROR, "fsFileLoad: short read (%u/%u): %s",
+						(unsigned)loaded, (unsigned)size, fullName);
+				sysMemFree(buf);
+				fclose(f);
+				return NULL;
+			}
+		}
 	}
 
 	fclose(f);

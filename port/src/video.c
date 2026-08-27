@@ -203,6 +203,32 @@ void videoClearScreen(void)
 	videoEndFrame();
 }
 
+void videoBeginLoadingActivity(s32 fromStage, s32 toStage)
+{
+#ifdef PLATFORM_XBOX
+	gfx_xbox_loading_begin(fromStage, toStage);
+#else
+	(void)fromStage;
+	(void)toStage;
+#endif
+}
+
+void videoPulseLoadingActivity(void)
+{
+#ifdef PLATFORM_XBOX
+	gfx_xbox_loading_pulse();
+#endif
+}
+
+void videoEndLoadingActivity(s32 stage)
+{
+#ifdef PLATFORM_XBOX
+	gfx_xbox_loading_end(stage);
+#else
+	(void)stage;
+#endif
+}
+
 void *videoGetWindowHandle(void)
 {
 	if (initDone) {

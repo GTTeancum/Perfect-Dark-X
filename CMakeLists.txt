@@ -35,8 +35,16 @@ endif()
 set(ROMID "ntsc-final" CACHE STRING "Which ROM to build an executable for: ntsc-final, pal-final or jpn-final")
 option(FORCE_CROSSCOMPILE "Force cross compiling" NO)
 option(PD_XBOX_TRACE_MARKS "Emit high-frequency Xbox crash breadcrumbs to COM1" OFF)
+option(PD_XBOX_GPU_SYNC_TRACE
+  "Synchronize and log every first-frame NV2A pushbuffer block" OFF)
 option(PD_XBOX_RENDER_QUALIFY_EFFECTS
   "Stress stochastic-alpha and character-cloak rendering on Xbox" OFF)
+option(PD_XBOX_QUALIFICATION_CONFIG
+  "Allow the Xbox build to load qualification-only pdx_boot.ini overrides" OFF)
+option(PD_XBOX_IGR_TEST
+  "Automatically exercise the Xbox dashboard-reset path after boot" OFF)
+set(PD_XBOX_TITLE_ID "0x41500001" CACHE STRING
+  "Original Xbox title ID used for the UDATA namespace and XeFu profile")
 set(PD_XBOX_RENDER_TRACE_FRAME "0" CACHE STRING
     "Emit one frame of aggregate NV2A draw-state diagnostics to COM1")
 
@@ -164,8 +172,17 @@ if(XBOX)
   if(PD_XBOX_TRACE_MARKS)
     add_definitions(-DPD_XBOX_TRACE_MARKS=1)
   endif()
+  if(PD_XBOX_GPU_SYNC_TRACE)
+    add_definitions(-DPD_XBOX_GPU_SYNC_TRACE=1)
+  endif()
   if(PD_XBOX_RENDER_QUALIFY_EFFECTS)
     add_definitions(-DPD_XBOX_RENDER_QUALIFY_EFFECTS=1)
+  endif()
+  if(PD_XBOX_QUALIFICATION_CONFIG)
+    add_definitions(-DPD_XBOX_QUALIFICATION_CONFIG=1)
+  endif()
+  if(PD_XBOX_IGR_TEST)
+    add_definitions(-DPD_XBOX_IGR_TEST=1)
   endif()
   if(NOT PD_XBOX_RENDER_TRACE_FRAME STREQUAL "0")
     add_definitions(-DPD_XBOX_RENDER_TRACE_FRAME=${PD_XBOX_RENDER_TRACE_FRAME})
@@ -465,6 +482,19 @@ if(XBOX)
         -OUT:${CMAKE_BINARY_DIR}/default.xbe
         -TITLE:"Perfect Dark X"
         $<TARGET_FILE:pd>
+      COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/scripts/patch-xbe-metadata.py
+        --xbe ${CMAKE_BINARY_DIR}/default.xbe
+        --title-id ${PD_XBOX_TITLE_ID}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/port/xbox_assets/TitleImage.xbx
+        ${CMAKE_BINARY_DIR}/TitleImage.xbx
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/port/xbox_assets/SaveImage.xbx
+        ${CMAKE_BINARY_DIR}/SaveImage.xbx
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/port/xbox_assets/TitleMeta.xbx
+        ${CMAKE_BINARY_DIR}/TitleMeta.xbx
       COMMENT "Converting pd executable -> default.xbe"
     )
   else()

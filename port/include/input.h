@@ -137,6 +137,16 @@ s32 inputControllerConnected(s32 idx);
 // returns bitmask of players with assigned controllers
 s32 inputControllerMask(void);
 
+#ifdef PLATFORM_XBOX
+// Qualification-only synthetic four-controller harness. These observers are
+// called from the stock joy layer so the harness validates the same samples and
+// pressed-button API used by gameplay and multiplayer joining.
+s32 inputControllerHarnessEnabled(void);
+void inputControllerHarnessObserveJoy(const OSContPad *pads, const u32 *buttonsPressed,
+		u32 connectedMask);
+void inputControllerHarnessObservePressedApi(s32 idx, u32 buttons);
+#endif
+
 // get/set Input.Player%d.SwapSticks
 s32 inputControllerGetSticksSwapped(s32 cidx);
 void inputControllerSetSticksSwapped(s32 cidx, s32 swapped);

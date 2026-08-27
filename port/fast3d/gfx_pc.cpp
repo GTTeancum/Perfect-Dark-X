@@ -1046,9 +1046,17 @@ static void import_texture(int i, int tile, bool importReplacement) {
     uint32_t external_height = 0;
     size_t external_bytes = 0;
 #ifdef PLATFORM_XBOX
+    static bool traced_external_upload = false;
     use_external = loaded_texture.external_id != UINT32_MAX
         && xboxExtTextureGetInfo(loaded_texture.external_id,
             &external_width, &external_height);
+    const bool trace_external = use_external && !traced_external_upload;
+    if (trace_external) {
+        traced_external_upload = true;
+        sysLogPrintf(LOG_NOTE, "PDTX HWTRACE A import id=%04lx tile=%d stage=%d size=%lux%lu",
+            (unsigned long)loaded_texture.external_id, tile, i,
+            (unsigned long)external_width, (unsigned long)external_height);
+    }
     if (use_external) {
         // Match gfx_nv2a's 64-byte row-pitch alignment exactly.
         external_bytes = ALIGN((size_t)external_width * 4u, 64u)
@@ -1066,15 +1074,89 @@ static void import_texture(int i, int tile, bool importReplacement) {
     if (gfx_texture_cache_lookup(i, key, external_bytes)) {
         return;
     }
+#ifdef PLATFORM_XBOX
+    if (trace_external) {
+        sysLogPrintf(LOG_NOTE, "PDTX HWTRACE B cache slot selected bytes=%lu",
+            (unsigned long)external_bytes);
+    }
+#endif
 
 #ifdef PLATFORM_XBOX
     if (use_external) {
+        static unsigned import_window_count = 0;
+        static ULONGLONG import_window_ticks = 0;
+        static ULONGLONG import_window_max_ticks = 0;
+        static uint32_t import_window_max_id = UINT32_MAX;
+        static uint64_t import_window_bytes = 0;
+        const ULONGLONG import_started = KeQueryPerformanceCounter();
         uint32_t width = external_width;
         uint32_t height = external_height;
         uint8_t *pixels = xboxExtTextureLoad(loaded_texture.external_id, &width, &height);
         if (pixels) {
+            // Preserve replacement provenance in the rendering backend. The
+            // earlier diagnostic only remembered that some replacement had
+            // uploaded, so an unrelated later draw could be reported as
+            // proof. These fields travel with the exact backend texture.
+            g_XboxExtTextureUploadActive = 1;
+            g_XboxExtTextureUploadId = loaded_texture.external_id;
+            if (trace_external) {
+                sysLogPrintf(LOG_NOTE, "PDTX HWTRACE C backend upload begin");
+                g_XboxExtTextureUploadTrace = 1;
+            }
             gfx_rapi->upload_texture(pixels, width, height, false);
+            g_XboxExtTextureUploadActive = 0;
+            g_XboxExtTextureUploadId = UINT32_MAX;
+            if (trace_external) {
+                g_XboxExtTextureUploadTrace = 0;
+                sysLogPrintf(LOG_NOTE, "PDTX HWTRACE D backend upload complete");
+            }
             xboxExtTextureFree(pixels);
+            const ULONGLONG import_ticks =
+                KeQueryPerformanceCounter() - import_started;
+            const ULONGLONG import_frequency =
+                KeQueryPerformanceFrequency();
+            ++import_window_count;
+            import_window_ticks += import_ticks;
+            import_window_bytes += external_bytes;
+            if (import_ticks > import_window_max_ticks) {
+                import_window_max_ticks = import_ticks;
+                import_window_max_id = loaded_texture.external_id;
+            }
+            if (import_window_count == 32u) {
+                const unsigned long import_avg_us = import_frequency
+                    ? (unsigned long)(import_window_ticks * 1000000u /
+                        (import_frequency * import_window_count)) : 0u;
+                const unsigned long import_max_us = import_frequency
+                    ? (unsigned long)(import_window_max_ticks * 1000000u /
+                        import_frequency) : 0u;
+                sysLogPrintf(LOG_NOTE,
+                    "PDTX PERF imports=%u avg_us=%lu max_us=%lu max_id=%04lx bytes=%llu",
+                    import_window_count, import_avg_us, import_max_us,
+                    (unsigned long)import_window_max_id,
+                    (unsigned long long)import_window_bytes);
+                import_window_count = 0;
+                import_window_ticks = 0;
+                import_window_max_ticks = 0;
+                import_window_max_id = UINT32_MAX;
+                import_window_bytes = 0;
+            }
+            const unsigned long import_ms = import_frequency
+                ? (unsigned long)(import_ticks * 1000u / import_frequency)
+                : 0u;
+            // Avoid turning ordinary first-use imports into synchronous log
+            // seeks.  The previous 8 ms diagnostic threshold flushed pd.log
+            // between random reads from ext_tex.pak and amplified the exact
+            // Start-transition hitch it was measuring.  Preserve evidence for
+            // genuinely pathological reads only.
+            if (import_ms >= 50u) {
+                sysLogPrintf(LOG_WARNING,
+                    "PDTX slow import id=%04lx size=%lux%lu time=%lums",
+                    (unsigned long)loaded_texture.external_id,
+                    (unsigned long)width, (unsigned long)height, import_ms);
+            }
+            if (trace_external) {
+                sysLogPrintf(LOG_NOTE, "PDTX HWTRACE E source pixels freed");
+            }
             return;
         }
         sysLogPrintf(LOG_WARNING,

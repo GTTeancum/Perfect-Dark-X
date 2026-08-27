@@ -154,22 +154,6 @@ if [[ -f "$GBC_ROM" ]]; then
     echo "  pd.gbc (GBC ROM)"
 fi
 
-# Default config — sets 480p if available, skips intro for faster testing
-cat > "$DISK_DIR/pd.ini" <<'INI'
-[Game]
-SkipIntro = 1
-MemorySize = 24
-
-[Video]
-DefaultFullscreen = 1
-VSync = 1
-FramerateLimit = 60
-
-[Audio]
-BufferSize = 512
-INI
-echo "  pd.ini (default config)"
-
 echo "Disc directory: $DISK_DIR"
 
 # ── Create XISO ───────────────────────────────────────────────────────────────

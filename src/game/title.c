@@ -355,6 +355,15 @@ Gfx *titleRenderLegal(Gfx *gdl)
 		for (; elem < end; elem++) {
 			u32 colour = 0x7f7fffff;
 
+#ifdef PLATFORM_XBOX
+			if (elem->textid == L_OPTIONS_077) {
+				elem->textptr = "Product Information";
+			} else if (elem->textid == L_OPTIONS_076) {
+				elem->textptr = "MICROSOFT XBOX";
+				elem->x = 97;
+			}
+#endif
+
 			switch (elem->type) {
 			case LEGALELEMENTTYPE_BLUETEXTSM:
 				font1 = g_CharsHandelGothicSm;

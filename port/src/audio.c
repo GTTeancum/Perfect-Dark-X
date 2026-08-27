@@ -1,4 +1,5 @@
 #include <PR/ultratypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <SDL.h>
@@ -20,6 +21,8 @@ void serialPuts(const char *s);
 static u8 *xboxBuffers[XBOX_AUDIO_BUFFER_COUNT];
 static u32 xboxBufferIndex;
 static u32 xboxRateRemainder;
+static volatile bool xboxStageTransition;
+static u64 xboxTransitionStartedUs;
 #else
 static SDL_AudioDeviceID dev;
 #endif
@@ -42,7 +45,6 @@ s32 audioInit(void)
 		}
 		memset(xboxBuffers[i], 0, XBOX_AUDIO_BUFFER_BYTES);
 	}
-
 	XAudioInit(16, 2, NULL, NULL);
 	// Prime enough silence to cover boot-time jitter before the first mix.
 	for (u32 i = 0; i < 3; ++i) {
@@ -50,6 +52,8 @@ s32 audioInit(void)
 	}
 	xboxBufferIndex = 3;
 	xboxRateRemainder = 0;
+	xboxStageTransition = false;
+	xboxTransitionStartedUs = 0;
 	XAudioPlay();
 	nextBuf = NULL;
 	sysLogPrintf(LOG_NOTE, "audio: Xbox AC97 direct stream 48000 Hz, stereo S16");
@@ -81,6 +85,71 @@ s32 audioInit(void)
 #endif
 
 	return 0;
+}
+
+void audioBeginStageTransition(s32 fromStage, s32 toStage)
+{
+#ifdef PLATFORM_XBOX
+	volatile u8 *ac97 = (volatile u8 *)0xfec00000;
+	char msg[160];
+
+	if (xboxStageTransition) return;
+	xboxStageTransition = true;
+	xboxTransitionStartedUs = sysGetMicroseconds();
+	nextBuf = NULL;
+	nextSize = 0;
+	XAudioPause();
+
+	sysLogPrintf(LOG_NOTE,
+			"audio: transition begin from=%d to=%d mode=paused civ=%u lvi=%u sr=%04x",
+			fromStage, toStage, (unsigned)ac97[0x114],
+			(unsigned)ac97[0x115], *(volatile u16 *)(ac97 + 0x116));
+	snprintf(msg, sizeof(msg),
+			"audio: transition begin from=%d to=%d mode=paused civ=%u lvi=%u sr=%04x\n",
+			fromStage, toStage, (unsigned)ac97[0x114],
+			(unsigned)ac97[0x115], *(volatile u16 *)(ac97 + 0x116));
+	serialPuts(msg);
+#else
+	(void)fromStage;
+	(void)toStage;
+#endif
+}
+
+void audioEndStageTransition(s32 stage)
+{
+#ifdef PLATFORM_XBOX
+	volatile u8 *ac97 = (volatile u8 *)0xfec00000;
+	u64 elapsedUs;
+	char msg[176];
+
+	if (!xboxStageTransition) return;
+	xboxStageTransition = false;
+	elapsedUs = sysGetMicroseconds() - xboxTransitionStartedUs;
+	XAudioPlay();
+	sysLogPrintf(LOG_NOTE,
+			"audio: transition end stage=%d ms=%llu mode=playing civ=%u lvi=%u sr=%04x",
+			stage, (unsigned long long)(elapsedUs / 1000u),
+			(unsigned)ac97[0x114], (unsigned)ac97[0x115],
+			*(volatile u16 *)(ac97 + 0x116));
+	snprintf(msg, sizeof(msg),
+			"audio: transition end stage=%d ms=%llu mode=playing civ=%u lvi=%u sr=%04x\n",
+			stage, (unsigned long long)(elapsedUs / 1000u),
+			(unsigned)ac97[0x114], (unsigned)ac97[0x115],
+			*(volatile u16 *)(ac97 + 0x116));
+	serialPuts(msg);
+#else
+	(void)stage;
+#endif
+}
+
+void audioStopForDashboard(void)
+{
+#ifdef PLATFORM_XBOX
+	nextBuf = NULL;
+	nextSize = 0;
+	XAudioPause();
+	serialPuts("audio: stopped for dashboard IGR\n");
+#endif
 }
 
 s32 audioGetBytesBuffered(void)

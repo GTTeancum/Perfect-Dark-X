@@ -17,6 +17,7 @@
 #include "lib/lib_317f0.h"
 #include "lib/memp.h"
 #include "lib/mtx.h"
+#include "lib/joy.h"
 #include "lib/snd.h"
 #include "lib/str.h"
 #include "lib/vi.h"
@@ -1649,6 +1650,39 @@ Gfx *hudmsgsRender(Gfx *gdl)
 
 		gdl = countdownTimerRender(gdl);
 	}
+
+#ifdef PLATFORM_XBOX
+	// Keep the notice local to the affected split-screen viewport. The backend
+	// reports detach/reattach through the stock joy mask, so this disappears as
+	// soon as the assigned controller is available again.
+	if (g_Vars.currentplayerstats
+			&& (lvGetDisconnectedPlayerMask() & (1U << g_Vars.currentplayernum))) {
+		{
+			char *text = "CONTROLLER DISCONNECTED\nPLEASE RECONNECT";
+			s32 textheight;
+			s32 textwidth;
+			s32 x;
+			s32 y;
+			s32 viewleft = viGetViewLeft() / g_ScaleX;
+			s32 viewwidth = viGetViewWidth() / g_ScaleX;
+			s32 viewtop = viGetViewTop();
+			s32 viewheight = viGetViewHeight();
+
+			textMeasure(&textheight, &textwidth, text,
+					g_CharsHandelGothicSm, g_FontHandelGothicSm, 0);
+			x = viewleft + (viewwidth - textwidth) / 2;
+			y = viewtop + (viewheight - textheight) / 2;
+			gdl = playerDrawFade(gdl, 0, 0, 0, 0.72f);
+			gdl = text0f153628(gdl);
+			gdl = hudmsgRenderBox(gdl, x - 5, y - 4,
+					x + textwidth + 4, y + textheight + 3,
+					1.0f, 0x00ff0060, 1.0f);
+			gdl = textRenderProjected(gdl, &x, &y, text,
+					g_CharsHandelGothicSm, g_FontHandelGothicSm,
+					0x00ff00ff, viGetWidth(), viGetHeight(), 0, 0);
+		}
+	}
+#endif
 
 	gdl = text0f153780(gdl);
 

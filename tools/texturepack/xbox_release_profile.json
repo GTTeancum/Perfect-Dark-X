@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "base_max_dimension": 128,
-  "large_max_dimension": 512,
+  "base_max_dimension": 64,
+  "large_max_dimension": 128,
   "promote_ids": [
     "009b",
     "0216",
@@ -9,9 +9,9 @@
     "0a03"
   ],
   "rationale": {
-    "009b": "City-window atlas visible across the opening flyover.",
-    "0216": "Large illuminated architectural atlas where downscaling loses fine emissive detail.",
-    "089f": "Air Force One exterior atlas used over a large hero model.",
-    "0a03": "Large mountain backdrop whose high-frequency silhouette and snow detail benefit from the promoted tier."
+    "009b": "City-window atlas visible across the opening flyover; retained at the 128-pixel hero tier.",
+    "0216": "Large illuminated architectural atlas; retained at the 128-pixel hero tier without exhausting the 720p cache.",
+    "089f": "Air Force One exterior atlas used over a large hero model; retained at the 128-pixel hero tier.",
+    "0a03": "Large mountain backdrop whose silhouette benefits from the 128-pixel hero tier."
   }
 }

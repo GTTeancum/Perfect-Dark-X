@@ -30,10 +30,11 @@ have not been resized or captured from the desktop.
 
 ## Current status
 
-This is a release-preview port. The campaign, combat simulator, menus, sound,
-dual-analog controls, and two- to four-player split-screen are running on the
-Original Xbox target. The game runs without keeping a 32 MiB N64 ROM resident:
-the release image uses a loose extracted asset tree so the memory can instead
+Version 1.0 of the Xbox port is prepared for hardware qualification. The
+campaign, combat simulator, menus, sound, dual-analog controls, and two- to
+four-player split-screen are running on the Original Xbox target. The installed
+game runs without keeping a 32 MiB N64 ROM resident: the desktop asset installer
+creates a loose runtime tree from the user's own ROM so the memory can instead
 serve the game and renderer.
 
 Implemented Xbox-specific work includes:
@@ -42,7 +43,8 @@ Implemented Xbox-specific work includes:
 - dashboard-controlled 480i, 480p, widescreen, and native 720p output;
 - Hor+ world projection with existing HUD and menu safe-area behavior;
 - direct 48 kHz stereo AC97 audio;
-- Original Xbox controller support for up to four local players;
+- four independently polled Original Xbox controllers, including multiplayer
+  join-by-Start and in-game disconnect/reconnect notices;
 - bounded, demand-loaded diffuse texture replacements;
 - ROM-free XDVDFS packaging from an owner-extracted loose asset tree;
 - serial diagnostics, crash reporting, and a non-focus-stealing XEMU test
@@ -88,7 +90,7 @@ explosion benchmarks.
 - XBLA-only bump, normal, specular, cubemap, and other material maps are not
   loaded.
 
-## Installing a release
+## Installing the release
 
 ### Requirements
 
@@ -98,26 +100,58 @@ explosion benchmarks.
 - 720p is always widescreen. Use the dashboard's 480-line 4:3 mode for a 4:3
   display.
 
-Release archives contain `pdx-textures.iso`, an Xbox XDVDFS image. It is not a
-standard ISO 9660 disc image.
+The release ZIP contains:
 
-### Original Xbox: folder installation
+- `default.xbe`;
+- `PerfectDarkXAssetInstaller.exe`;
+- `ext_tex.pak`;
+- `TitleImage.xbx`, `SaveImage.xbx`, and `TitleMeta.xbx` dashboard metadata;
+- a succinct `readme.txt`, the license, and checksums.
 
-1. Extract `pdx-textures.iso` with an XDVDFS-aware Xbox ISO tool such as
-   `extract-xiso`. Windows Explorer and ordinary ISO tools will not extract it
-   correctly.
-2. Transfer the extracted directory to a games folder on the Xbox hard drive,
+It contains no N64 ROM, no files extracted from one, and no asset-bearing XISO.
+The installer reads the user's ROM locally and never copies it into the
+generated Xbox folder. The included `ext_tex.pak` contains only the replacement
+texture pack and is copied unchanged after ROM extraction succeeds.
+
+### Build your local game folder
+
+1. Download and extract the release ZIP on a Windows PC.
+2. Place your legally owned NTSC-final/US v1.1 `.z64` ROM in that extracted
+   folder beside `PerfectDarkXAssetInstaller.exe`.
+3. Run `PerfectDarkXAssetInstaller.exe`. It automatically detects `default.xbe`,
+   `ext_tex.pak`, and a single `.z64` file beside it. The GUI verifies the ROM's
+   size and MD5 before extracting anything.
+4. Keep the default `Perfect Dark X` output folder or select another new
+   or empty folder, then click **Install**. The GUI remains
+   responsive, reports each stage through a progress bar, supports safe
+   cancellation, and publishes the output only after every stage succeeds.
+5. For XEMU or an Xbox loader that needs an image, enable the local-XISO
+   checkbox. The asset-bearing XISO is generated only on the user's PC and is
+   never included in the release download.
+
+The generated folder contains `default.xbe`, `ext_tex.pak`, the three Xbox
+dashboard metadata files, `filenames.lst`, `files`, `segs`, and
+`pdx-install.json`. It never contains the source ROM.
+Xbox-specific performance, video, audio, and input defaults are built into the
+XBE rather than exposed through an editable configuration file. FTP that entire
+generated folder to the Xbox.
+
+The XBE uses title ID `0x41500001` for the Xbox 360 XeFu compatibility test.
+Save data and dashboard metadata are stored under `E:\UDATA\41500001`; game
+progress is held in `eeprom.bin`.
+
+### Original Xbox
+
+1. Transfer the installer-generated folder to a games directory on the Xbox,
    for example `F:\Games\Perfect Dark X`, using FTP or another Xbox-aware
    transfer method.
-3. Confirm the folder contains `default.xbe`, `pd.ini`, `filenames.lst`,
-   `files`, `segs`, and `ext_tex.pak`.
-4. Configure aspect ratio and HD modes in the Microsoft dashboard before
+2. Configure aspect ratio and HD modes in the Microsoft dashboard before
    launching the game.
-5. Launch `default.xbe` from the replacement dashboard.
+3. Launch `default.xbe` from the replacement dashboard.
 
-A dashboard or BIOS with direct XISO support may launch `pdx-textures.iso`
-without extracting it. Consult that loader's documentation; folder installation
-is the most broadly compatible method.
+A dashboard or BIOS with direct XISO support may instead launch the image that
+the user generated locally. Folder installation is the most broadly compatible
+method.
 
 ### XEMU
 
@@ -125,7 +159,8 @@ is the most broadly compatible method.
    EEPROM.
 2. Enable the desired widescreen/progressive modes in the emulated Microsoft
    dashboard.
-3. Load `pdx-textures.iso` as the game disc and start the emulator.
+3. Enable the installer's local-XISO checkbox, then load that locally generated
+   image as XEMU's game disc.
 4. When using 720p, set XEMU's presentation aspect to 16:9. Some XEMU versions
    can choose a 4:3 host surface when their presentation setting is left on
    `Auto`, even though the guest is rendering 1280x720.
@@ -149,8 +184,13 @@ The default Xbox-style scheme uses both analog sticks:
 | Crouch cycle | Left thumbstick click |
 | Pause | Start |
 
-Controls can also be adjusted through the game's control options. Each local
-player is assigned a connected controller during startup.
+Controls can also be adjusted through the game's control options. Controllers
+1–4 are polled independently. In multiplayer setup, each connected controller
+can join by pressing Start. Connecting a controller after startup updates that
+join list. Disconnecting any controller assigned to an active player pauses
+gameplay in single-player, co-op, counter-op, and multiplayer. The affected
+viewport is darkened while its reconnect notice remains at full brightness;
+gameplay resumes automatically after every required controller returns.
 
 ## Building the Xbox port
 
@@ -192,7 +232,7 @@ cmake --build build-xbox --parallel
 
 The resulting executable is `build-xbox/default.xbe`.
 
-### 3. Build the optional diffuse texture pack
+### 3. Build the diffuse texture pack
 
 The replacement pack requires an owner-supplied Perfect Dark XBLA archive.
 Extraction and matching are intentionally separate from the game build:
@@ -202,21 +242,45 @@ Extraction and matching are intentionally separate from the game build:
 
 The final pack is `texturepack-work/release/ext_tex.pak`.
 
-### 4. Pack the release XISO
+### 4. Run or build the asset installer
 
-With the replacement texture pack:
+The GUI source and standalone-build instructions are in the
+[asset installer documentation](tools/pdx_asset_installer/README.md). Run it
+directly with Python:
+
+```powershell
+python tools/pdx_asset_installer/installer.py
+```
+
+The release ZIP is produced by an allowlisted packager. It accepts only the
+XBE, installer, texture pack, release `readme.txt`, license, and generated checksum file;
+`.iso`, ROM, and extracted ROM assets cannot enter the archive:
+
+```powershell
+python tools/pdx_asset_installer/package_core.py `
+  --xbe build-xbox/default.xbe `
+  --installer build-xbox/asset-installer-build/PerfectDarkXAssetInstaller.exe `
+  --texture-pack texturepack-work/release/ext_tex.pak `
+  --out build-xbox/release/Perfect-Dark-X.zip
+```
+
+### 5. Developer-only local XISO
+
+Developers may still pack already extracted local assets for qualification:
 
 ```powershell
 python scripts/pack-loose-xiso.py `
   --xbe build-xbox/default.xbe `
   --loose build/loose `
   --texture-pack texturepack-work/release/ext_tex.pak `
-  --out build-xbox/pdx-textures.iso
+  --out build-xbox/pdx-local-test.iso
 ```
 
-For a stock-texture build, omit `--texture-pack`. Qualification-only
-`pdx_boot.ini` overrides are accepted only through the packer's `--boot-ini`
-argument and must never be included in a release image.
+This output contains copyrighted, user-supplied data. It is local test output,
+not a distributable release. For a stock-texture test, omit `--texture-pack`.
+Qualification-only `pdx_boot.ini` overrides require an XBE configured with
+`-DPD_XBOX_QUALIFICATION_CONFIG=ON` and are accepted only through the packer's
+`--boot-ini` argument. Release builds ignore external configuration files.
 
 ## Project lineage and credits
 

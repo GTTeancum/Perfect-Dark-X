@@ -40,6 +40,9 @@ void lvConfigureFade(u32 color, s16 num_frames);
 bool lvIsFadeActive(void);
 void lvStop(void);
 bool lvIsPaused(void);
+#ifdef PLATFORM_XBOX
+u32 lvGetDisconnectedPlayerMask(void);
+#endif
 s32 lvGetDifficulty(void);
 void lvSetDifficulty(s32 difficulty);
 void lvSetMpTimeLimit60(u32 limit);

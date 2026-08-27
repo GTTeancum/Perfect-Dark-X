@@ -4,7 +4,7 @@
 //   • Initialising the NV2A GPU via pbkit
 //   • Setting the video output mode via XVideoSetMode
 //   • Timing (KeQueryPerformanceCounter for get_time / FPS limiter)
-//   • Frame pacing (pb_show_front_screen / pb_wait_for_vbl)
+//   • Frame pacing (pb_finished VBlank queue + target-FPS limiter)
 //   • Polling the SDL event queue (for SDL_QuitEvent from the dashboard button)
 //
 // Aspect ratio and resolution come exclusively from the Xbox dashboard. A
@@ -51,6 +51,7 @@ static void (*g_on_fullscreen_changed)(bool) = nullptr;
 
 static ULONGLONG g_perf_freq  = 0;
 static ULONGLONG g_frame_start = 0;
+static ULONGLONG g_work_start = 0;
 static int       g_target_fps  = 60;
 
 static ULONGLONG qpc_now(void)
@@ -172,7 +173,18 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     // At 720p one scratch surface costs another 3.5 MiB. The optional mode
     // disables framebuffer effects and renders directly to the back buffer so
     // the 16 MiB game heap remains available.
-    pb_extra_buffers(gfx_xbox_wm_is_720p() ? 0 : 1);
+    const bool initializing_720p = gfx_xbox_wm_is_720p();
+    pb_extra_buffers(initializing_720p ? 0 : 1);
+
+    // pbkit's 720p initialization stream exceeds its 512 KiB default
+    // pushbuffer before the first frame. XEMU accepts the out-of-range reset
+    // jump, but the original NV2A consumes past it and leaves DMA GET ahead of
+    // the rewound PUT forever. One MiB keeps initialization and its jump within
+    // the allocated DMA ring; individual frames are still reset normally.
+    if (initializing_720p) {
+        pb_size(1024u * 1024u);
+        sysLogPrintf(LOG_NOTE, "Xbox 720p pushbuffer: 1024 KiB");
+    }
 
     // Initialise pbkit (NV2A push-buffer engine)
     int pb_err = pb_init();
@@ -203,6 +215,7 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
         if (!XVideoSetMode(g_output_width, g_output_height, 32, g_refresh)) {
             sysFatalError("720p fallback could not set 640x480 video mode.");
         }
+        pb_size(512u * 1024u);
         pb_extra_buffers(1);
         pb_err = pb_init();
         pb_geometry_ok = pb_err == 0
@@ -355,36 +368,27 @@ static void xbox_wm_handle_events(void)
 
 static bool xbox_wm_start_frame(void)
 {
+    g_work_start = qpc_now();
     return g_is_running;
 }
 
 static void xbox_wm_swap_buffers_begin(void)
 {
-    // pb_show_front_screen() is called in gfx_nv2a finish_render; nothing here.
+    // pb_finished() queues the completed buffer in gfx_nv2a::finish_render.
 }
 
 static void xbox_wm_swap_buffers_end(void)
 {
-    // Frame heartbeat on the UART: the only way to tell "loop alive but
-    // drawing nothing" from "loop blocked" without taking the window.
-    {
-        static unsigned frames = 0;
-        static ULONGLONG last = 0;
-        if ((++frames % 60u) == 0u) {
-            const ULONGLONG now = qpc_now();
-            char hb[96];
-            if (last && now > last) {
-                const ULONGLONG dt = now - last;
-                const unsigned milli = (unsigned)((60ULL * g_perf_freq * 1000ULL) / dt);
-                snprintf(hb, sizeof(hb), "frame %u  fps %u.%03u\n",
-                         frames, milli / 1000u, milli % 1000u);
-            } else {
-                snprintf(hb, sizeof(hb), "frame %u  (first)\n", frames);
-            }
-            last = now;
-            serialPuts(hb);
-        }
-    }
+    static unsigned frames = 0;
+    static ULONGLONG last = 0;
+    static ULONGLONG work_total = 0;
+    static ULONGLONG work_max = 0;
+    static ULONGLONG limiter_total = 0;
+    static ULONGLONG limiter_max = 0;
+
+    const ULONGLONG work_complete = qpc_now();
+    const ULONGLONG work_ticks = work_complete >= g_work_start
+        ? work_complete - g_work_start : 0;
 
     if (g_target_fps > 0) {
         // Simple busy-wait FPS limiter
@@ -393,7 +397,43 @@ static void xbox_wm_swap_buffers_end(void)
             // spin
         }
     }
-    g_frame_start = qpc_now();
+    const ULONGLONG frame_complete = qpc_now();
+    if (!last) {
+        // Anchor the first 60-frame window at the first frame boundary.  A
+        // zero anchor made the first hardware report look like 0 fps.
+        last = g_frame_start;
+    }
+    const ULONGLONG limiter_ticks = frame_complete - work_complete;
+    work_total += work_ticks;
+    limiter_total += limiter_ticks;
+    if (work_ticks > work_max) work_max = work_ticks;
+    if (limiter_ticks > limiter_max) limiter_max = limiter_ticks;
+
+    if ((++frames % 60u) == 0u) {
+        const ULONGLONG elapsed = last && frame_complete > last
+            ? frame_complete - last : 0;
+        const unsigned milli = elapsed
+            ? (unsigned)(60ULL * g_perf_freq * 1000ULL / elapsed) : 0;
+        const unsigned long work_avg_us = g_perf_freq
+            ? (unsigned long)(work_total * 1000000u / (g_perf_freq * 60u)) : 0;
+        const unsigned long work_max_us = g_perf_freq
+            ? (unsigned long)(work_max * 1000000u / g_perf_freq) : 0;
+        const unsigned long limiter_avg_us = g_perf_freq
+            ? (unsigned long)(limiter_total * 1000000u / (g_perf_freq * 60u)) : 0;
+        const unsigned long limiter_max_us = g_perf_freq
+            ? (unsigned long)(limiter_max * 1000000u / g_perf_freq) : 0;
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A PERF wall_fps=%u.%03u work_us=%lu/%lu limiter_us=%lu/%lu target=%d",
+                     milli / 1000u, milli % 1000u,
+                     work_avg_us, work_max_us,
+                     limiter_avg_us, limiter_max_us, g_target_fps);
+        last = frame_complete;
+        work_total = 0;
+        work_max = 0;
+        limiter_total = 0;
+        limiter_max = 0;
+    }
+    g_frame_start = frame_complete;
 }
 
 static double xbox_wm_get_time(void)
@@ -413,7 +453,7 @@ static void xbox_wm_set_target_fps(int fps)
     g_target_fps = fps;
 }
 
-// ── VSync (XBox is always locked to vblank via pbkit) ────────────────────────
+// ── VSync (pb_finished queues every completed frame for the VBlank ISR) ─────
 
 static bool xbox_wm_can_disable_vsync(void)
 {

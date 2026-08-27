@@ -26,13 +26,16 @@ python tools/texturepack/build_xbox_pack.py `
   --manifest texturepack-work/release/manifest.json `
   --profile tools/texturepack/xbox_release_profile.json `
   --output texturepack-work/release/ext_tex.pak `
-  --large-texture-limit 4
-python scripts/pack-loose-xiso.py `
-  --xbe build-xbox/default.xbe `
-  --loose build/loose `
-  --texture-pack texturepack-work/release/ext_tex.pak `
-  --out build-xbox/pdx-textures.iso
+  --large-texture-limit 4 `
+  --compression-level 9
 ```
+
+`ext_tex.pak` is the final texture-pack artifact and may be bundled with the
+XBE and asset-installer GUI. It is not derived from the user's N64 ROM. The GUI
+extracts the user's ROM first, then validates and copies this pack unchanged
+into a new ROM-free Xbox folder. Any XISO containing extracted ROM assets is
+generated locally on the user's PC and must not be uploaded as a release
+artifact.
 
 `match_textures.py` emits labelled sheets under `matched/review`. Every entry it
 marks `visual-review-required` must be listed in `review_decisions.json` before
@@ -44,8 +47,11 @@ from upstream Perfect Dark PR #653: four-digit lowercase hexadecimal stock
 texture IDs. Missing PNGs intentionally fall back to stock N64 textures.
 
 `build_xbox_pack.py` applies the release profile: all ordinary replacements are
-bounded to 128 pixels on their longest edge, while only texture IDs `009b`,
-`0216`, `089f`, and `0a03` may reach 512 pixels. It writes a seekable
+bounded to 64 pixels on their longest edge, while only texture IDs `009b`,
+`0216`, `089f`, and `0a03` may reach 128 pixels. Hardware-oriented 720p smoke
+testing established this as the largest tier that keeps an active scene inside
+the 1 MiB residency budget; 128/256 and 128/512 packs caused sustained eviction
+and repeated synchronous decompression. The builder writes a seekable
 `ext_tex.pak`, then reads back and decompresses every payload. The runtime
 indexes its table once and loads textures on demand. The renderer keeps at most
 128 stock/replacement cache entries and separately bounds resident external
@@ -102,7 +108,8 @@ presentation can expose a 4:3 capture surface even while the guest is running
 a 16:9 video mode. It is a qualification setting only and is not needed by the
 game on an Xbox.
 
-The qualification INIs are deliberately separate from the release image:
+The qualification INIs are deliberately separate from the public release
+and normal user install:
 
 - `pdx_widescreen_gameplay_test.ini`: gameplay boot fixture; video comes from the qualification dashboard profile.
 - `pdx_4x3_gameplay_test.ini`: 4:3 gameplay fixture used with `xemu_480p_4x3.toml`.
@@ -112,9 +119,9 @@ The qualification INIs are deliberately separate from the release image:
 - `pdx_widescreen_multiplayer_test.ini`: two-player split-screen runtime check.
 - `pdx_multiplayer_3p_test.ini` and `pdx_multiplayer_4p_test.ini`: remaining split layouts.
 
-Pack a qualification ISO by adding `--boot-ini` to `pack-loose-xiso.py`. Never
-put a qualification boot override in `pdx-textures.iso`; the release image must
-contain only `default.xbe`, the normal loose data, and `ext_tex.pak`.
+Developers may pack a local qualification ISO by adding `--boot-ini` to
+`pack-loose-xiso.py`. Never distribute that asset-bearing image or place a
+qualification boot override in an end-user install.
 
 Run unattended qualification through the smoke harness so XEMU stays minimized
 and does not take focus. Captures must use XEMU's native screenshot request, not
@@ -131,7 +138,7 @@ python scripts/pdx_xemu_smoke.py `
   --xemu-screenshot-flag-rva 0x13a3ff0
 ```
 
-Release acceptance requires the 480p 16:9 gameplay, menus, two-player
+Runtime acceptance requires the 480p 16:9 gameplay, menus, two-player
 split-screen, and sustained texture-pack runs to remain alive without pbkit or
 texture allocation failures, page faults, asserts, corruption, or sustained
 cache thrashing. Inspect every native screenshot sequentially. The optional

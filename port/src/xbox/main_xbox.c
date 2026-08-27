@@ -53,7 +53,6 @@ u32 g_OsMemSize    = 0;
 // ~32 MB free, so use 16 MB = 8 MB onboard + 8 MB expansion, matching the
 // desktop default exactly. At 12 MB the onboard pool is only 4 MB, which
 // starves stage allocation and crashes in lvReset as described above.
-// NOTE: Game.MemorySize in pd.ini overrides this; keep them in sync.
 s32 g_OsMemSizeMb  = 16;
 u8  g_Is4Mb        = 0;
 s8  g_Resetting    = 0;
@@ -72,7 +71,7 @@ u8  g_VmShowStats       = 0;
 
 s32 g_TickRateDiv    = 1;
 s32 g_TickExtraSleep = 1;
-s32 g_SkipIntro      = 0;
+s32 g_SkipIntro      = 1;
 s32 g_FileAutoSelect = -1;
 static s32 g_BootStage = STAGE_TITLE;
 static s32 g_BootPlayers = 1;
@@ -132,7 +131,6 @@ static void cleanup(void)
 {
     sysLogPrintf(LOG_NOTE, "shutdown");
     inputSaveBinds();
-    configSave(CONFIG_PATH);
     videoShutdown();
     crashShutdown();
 }
@@ -183,16 +181,17 @@ void __cdecl main(void)
     BOOT_PRINT("fsInit OK");
     dbgPhase(DBG_PHASE_FS_INIT, "fsInit OK - D:\\ accessible");
 
-    BOOT_PRINT("configInit...");
-    configInit();
-    // Qualification discs may provide a read-only boot override without
-    // mutating or being masked by the user's persistent E: configuration.
+    BOOT_PRINT("fixed Xbox defaults...");
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    // Dedicated qualification builds may provide a read-only boot override.
+    // Retail/release builds do not load any external configuration file.
     if (fsFileSize("$E/pdx_boot.ini") > 0) {
         configLoad("$E/pdx_boot.ini");
         serialPuts("PD-X: qualification boot override loaded\n");
     }
-    BOOT_PRINT("configInit OK");
-    dbgPhase(DBG_PHASE_CFG_INIT, "configInit OK");
+#endif
+    BOOT_PRINT("fixed Xbox defaults OK");
+    dbgPhase(DBG_PHASE_CFG_INIT, "fixed Xbox defaults OK");
 
     // ── Phase 5: video (pbkit + NV2A) ─────────────────────────────────────────
     // After this call pbkit is up; dbgPhase switches to pb_print output.
@@ -253,7 +252,7 @@ void __cdecl main(void)
     if (!g_MempHeap) {
         sysFatalError("Could not alloc %u MB for memp heap.\n"
                       "Physical RAM: total %u MB, available %u MB (ROM uses %u MB).\n"
-                      "Reduce Game.MemorySize in pd.ini.",
+                      "The fixed Xbox memory budget could not be allocated.",
                       g_MempHeapSize / (1024u*1024u), totalMb, availMb,
                       g_RomFileSize / (1024u*1024u));
     }

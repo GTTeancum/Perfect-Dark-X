@@ -36,10 +36,8 @@ def main():
                     help='directory holding files/, segs/ and filenames.lst')
     ap.add_argument('--out', default='perfectdarkx-loose.iso')
     ap.add_argument('--gbc', default=None, help='optional pd.gbc')
-    ap.add_argument('--pd-ini', default=None,
-                    help='optional pd.ini override for test/qualification images')
     ap.add_argument('--boot-ini', default=None,
-                    help='optional DVD-only pdx_boot.ini qualification override')
+                    help='optional pdx_boot.ini for a qualification-config XBE')
     ap.add_argument('--texture-pack', default=None,
                     help='optional ext_tex.pak built by tools/texturepack/build_xbox_pack.py')
     args = ap.parse_args()
@@ -49,10 +47,6 @@ def main():
     if not os.path.isdir(args.loose):
         sys.exit('loose dir not found: %s' % args.loose)
 
-    pd_ini = args.pd_ini if args.pd_ini else pack_xiso._PD_INI
-    if args.pd_ini and not os.path.isfile(args.pd_ini):
-        sys.exit('pd.ini override not found: %s' % args.pd_ini)
-
     entries = [('default.xbe', args.xbe)]
 
     controlled_root_files = {'pd.ini', 'pdx_boot.ini'}
@@ -61,10 +55,9 @@ def main():
     if not tree:
         sys.exit('no files found under %s' % args.loose)
     entries.extend(tree)
-    # The loose extraction may contain host-generated configuration files.
-    # Keep the explicitly selected disc configuration authoritative and never
-    # leak a qualification boot override into a release image.
-    entries.append(('pd.ini', pd_ini))
+    # Never leak host-generated configuration files into an image. Xbox
+    # release settings are fixed in the XBE; pdx_boot.ini is accepted only for
+    # an explicitly compiled qualification build.
     if args.boot_ini:
         if not os.path.isfile(args.boot_ini):
             sys.exit('boot ini override not found: %s' % args.boot_ini)

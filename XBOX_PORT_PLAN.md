@@ -167,7 +167,8 @@ Xbox system initialised
 [04] configInit OK
 ```
 
-Config defaults are applied. `pd.ini` is read from `D:\` if present.
+Fixed Xbox defaults are applied from the executable. Release builds do not
+read or write an external configuration file.
 
 ---
 
@@ -274,7 +275,8 @@ loading segment animations from ROM (offset 1a15c0 ...)
 
 > **Memory note:** The ROM is loaded entirely into RAM (32 MB). Combined with
 > the 16 MB game heap this uses ~48 MB of the Xbox's 64 MB. If allocations fail,
-> reduce `Game.MemorySize` in `pd.ini` to 12.
+> reduce the fixed Xbox game-memory default in `main_xbox.c` to 12 MB and
+> rebuild the XBE.
 
 ---
 
@@ -313,7 +315,7 @@ to game rendering. The N64-era title logo should appear.
 
 **What to look for:**
 - Title screen renders (even if glitchy — expected at first)
-- Frame rate visible via `Video.DisplayFPS = 1` in `pd.ini`
+- Frame-rate diagnostics are emitted through the qualification harness/UART
 - Controller input moves menu cursor
 
 **Expected initial issues (known, will be fixed per issue):**

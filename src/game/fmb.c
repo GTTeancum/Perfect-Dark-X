@@ -569,7 +569,7 @@ struct menuitem g_MainMenu4MbMenuItems[] = {
 		0,
 		(void *)&g_ChangeAgentMenuDialog,
 	},
-#ifndef PLATFORM_N64
+#if !defined(PLATFORM_N64) && !defined(PLATFORM_XBOX)
 	{
 		MENUITEMTYPE_SELECTABLE,
 		0,

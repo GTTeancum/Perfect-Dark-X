@@ -41,6 +41,10 @@ extern "C" {
 #include "platform.h"
 #include "system.h"
 
+extern "C" {
+#include "../src/xbox/ext_texture_xbox.h"
+}
+
 extern "C" void serialPuts(const char *s);
 
 // ── NV097 indexed-register helpers ──────────────────────────────────────────
@@ -130,6 +134,13 @@ static inline void nv2a_copy_pixels(uint32_t *dst, const uint32_t *src,
 #define TEXTURE_TILE_COUNT 2
 #define NV2A_TEXTURE_STAGE_COUNT 4
 
+// pbkit's DMA context 2, 2D, one-level linear/NPOT A8R8G8B8 format. Every
+// texture owned or aliased by this backend uses this single hardware layout.
+// Keeping it canonical avoids submitting partially initialized cached state.
+static const uint32_t NV2A_LINEAR_A8R8G8B8_FORMAT = 0x0001122au;
+static const uint32_t NV2A_TEXTURE_PHYSICAL_MASK = 0x03ffffffu;
+static const char NV2A_RUNTIME_BUILD_ID[] = "OG720-LOADSPIN-IGR-24";
+
 struct NV2ATexture {
     bool        used;
     uint32_t   *vram;        // contiguous physical memory for the texture
@@ -137,13 +148,18 @@ struct NV2ATexture {
     uint32_t    alias_pitch;
     uint32_t    width;
     uint32_t    height;
+    uint32_t    storage_width;
+    uint32_t    storage_height;
     uint32_t    pitch;
     uint32_t    fmt_word;    // NV097_SET_TEXTURE_FORMAT value cached
+    bool        swizzled;
     bool        linear_filter;
     uint8_t     address_s;
     uint8_t     address_t;
     bool        mipmaps;
     uint32_t    content_version;
+    bool        external;
+    uint32_t    external_id;
 };
 
 static inline uint32_t *nv2a_texture_data(const NV2ATexture &texture)
@@ -171,6 +187,11 @@ static bool g_texture_program_valid = false;
 static uint32_t g_texture_program = 0;
 static uint32_t g_draw_texture_width[TEXTURE_TILE_COUNT] = {};
 static uint32_t g_draw_texture_height[TEXTURE_TILE_COUNT] = {};
+static int g_draw_texture_id[TEXTURE_TILE_COUNT] = { -1, -1 };
+static bool g_draw_texture_external[TEXTURE_TILE_COUNT] = {};
+static uint32_t g_draw_texture_external_id[TEXTURE_TILE_COUNT] = {
+    UINT32_MAX, UINT32_MAX
+};
 
 static NV2ATexture g_blur_texture = {};
 static int g_blur_source_id = -1;
@@ -189,6 +210,79 @@ struct NV2AStreamVertex {
 static NV2AStreamVertex *g_stream_vertices = nullptr;
 static uint32_t g_stream_vertex_cursor = 0;
 static bool g_stream_attributes_bound = false;
+
+static inline bool nv2a_is_power_of_two(uint32_t value)
+{
+    return value && (value & (value - 1u)) == 0;
+}
+
+static uint32_t nv2a_log2_power_of_two(uint32_t value)
+{
+    uint32_t result = 0;
+    while (value > 1u) {
+        value >>= 1;
+        ++result;
+    }
+    return result;
+}
+
+static uint32_t nv2a_swizzled_a8r8g8b8_format(uint32_t width,
+                                               uint32_t height)
+{
+    // DMA selector 2 is pbkit's full 64 MiB DMA-B object. Swizzled 2D
+    // A8R8G8B8 encodes its power-of-two dimensions in FORMAT rather than in
+    // the LU_IMAGE rectangle alone.
+    return 2u | (1u << 3) | (2u << 4) | (0x06u << 8) | (1u << 16) |
+           (nv2a_log2_power_of_two(width) << 20) |
+           (nv2a_log2_power_of_two(height) << 24);
+}
+
+static void nv2a_generate_swizzle_masks(uint32_t width, uint32_t height,
+                                         uint32_t &mask_x, uint32_t &mask_y)
+{
+    mask_x = mask_y = 0;
+    uint32_t dimension_bit = 1;
+    uint32_t address_bit = 1;
+    bool done;
+    do {
+        done = true;
+        if (dimension_bit < width) {
+            mask_x |= address_bit;
+            address_bit <<= 1;
+            done = false;
+        }
+        if (dimension_bit < height) {
+            mask_y |= address_bit;
+            address_bit <<= 1;
+            done = false;
+        }
+        dimension_bit <<= 1;
+    } while (!done);
+}
+
+static inline uint32_t nv2a_spread_swizzle_bits(uint32_t value,
+                                                uint32_t mask)
+{
+    uint32_t result = 0;
+    uint32_t source_bit = 1;
+    for (uint32_t destination_bit = 1; destination_bit &&
+         destination_bit <= mask; destination_bit <<= 1) {
+        if (!(mask & destination_bit)) continue;
+        if (value & source_bit) result |= destination_bit;
+        source_bit <<= 1;
+    }
+    return result;
+}
+
+static inline uint32_t nv2a_swizzled_pixel_index(uint32_t x, uint32_t y,
+                                                  uint32_t width,
+                                                  uint32_t height)
+{
+    uint32_t mask_x, mask_y;
+    nv2a_generate_swizzle_masks(width, height, mask_x, mask_y);
+    return nv2a_spread_swizzle_bits(x, mask_x) |
+           nv2a_spread_swizzle_bits(y, mask_y);
+}
 
 static uint32_t nv2a_alloc_texture_id(void)
 {
@@ -275,8 +369,11 @@ static void nv2a_init_noise_texture(void)
         sysFatalError("NV2A: unable to allocate screen-noise texture");
     }
 
+    uint32_t mask_x, mask_y;
+    nv2a_generate_swizzle_masks(width, height, mask_x, mask_y);
+    uint32_t offset_y = 0;
     for (uint32_t y = 0; y < height; ++y) {
-        uint32_t *row = (uint32_t *)((uint8_t *)g_noise_texture.vram + y * pitch);
+        uint32_t offset_x = 0;
         for (uint32_t x = 0; x < width; ++x) {
             // Stable integer avalanche: all channels receive the same uniform
             // value, matching the scalar random() used by the PC fragment
@@ -288,15 +385,22 @@ static void nv2a_init_noise_texture(void)
             hash *= 0x846ca68bu;
             hash ^= hash >> 16;
             const uint32_t value = hash & 255u;
-            row[x] = value * 0x01010101u;
+            g_noise_texture.vram[offset_x + offset_y] =
+                value * 0x01010101u;
+            offset_x = (offset_x - mask_x) & mask_x;
         }
+        offset_y = (offset_y - mask_y) & mask_y;
     }
 
     g_noise_texture.used = true;
     g_noise_texture.width = width;
     g_noise_texture.height = height;
+    g_noise_texture.storage_width = width;
+    g_noise_texture.storage_height = height;
     g_noise_texture.pitch = pitch;
-    g_noise_texture.fmt_word = 0x0001122au;
+    g_noise_texture.fmt_word =
+        nv2a_swizzled_a8r8g8b8_format(width, height);
+    g_noise_texture.swizzled = true;
     g_noise_texture.linear_filter = false;
     g_noise_texture.address_s = 1; // repeat
     g_noise_texture.address_t = 1;
@@ -330,7 +434,126 @@ static void nv2a_program_blend_state(bool texture_edge)
     pb_end(p);
 }
 
+// Real NV2A requires both perspective bits to remain enabled for the
+// pre-transformed vertex stream used by this backend.  Xemu treats texture
+// perspective as effectively always-on, which hid this state leak: writing
+// zero here left hardware textured draws producing only their non-texture
+// combiner inputs.  Stencil passes may toggle bit 0, but must preserve the
+// perspective contract.
+static const uint32_t NV2A_CONTROL0_BASE =
+    NV097_SET_CONTROL0_Z_PERSPECTIVE_ENABLE |
+    NV097_SET_CONTROL0_TEXTURE_PERSPECTIVE_ENABLE;
+
+static inline uint32_t nv2a_control0(bool stencil_write)
+{
+    return NV2A_CONTROL0_BASE |
+        (stencil_write ? NV097_SET_CONTROL0_STENCIL_WRITE_ENABLE : 0u);
+}
+
 static uint32_t g_frame_count = 0;
+static bool g_logged_stock_texture_proof = false;
+static bool g_logged_external_texture_proof = false;
+static bool g_logged_shader_abi_upload = false;
+static uint32_t g_shader_abi_upload_serial = 0;
+static ULONGLONG g_perf_frame_started = 0;
+static ULONGLONG g_perf_submit_ticks = 0;
+static ULONGLONG g_perf_gpu_drain_ticks = 0;
+static ULONGLONG g_perf_queue_ticks = 0;
+static ULONGLONG g_perf_submit_max = 0;
+static ULONGLONG g_perf_gpu_drain_max = 0;
+static ULONGLONG g_perf_queue_max = 0;
+static DWORD g_perf_previous_vbl = 0;
+static DWORD g_perf_vbl_total = 0;
+static DWORD g_perf_vbl_max = 0;
+static unsigned g_perf_frame_samples = 0;
+
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+// The hardware trace is intentionally self-disabling. It isolates the first
+// textured draw (the command that used to fault) and then lets the title run
+// normally; tracing every pushbuffer submission makes a single boot frame take
+// minutes on an Xbox and can be mistaken for a 720p performance problem.
+static bool g_gpu_sync_trace_active = true;
+#endif
+
+static uint32_t nv2a_mmio_read(uint32_t offset)
+{
+    return *(volatile uint32_t *)(uintptr_t)(0xFD000000u + offset);
+}
+
+static void nv2a_dump_gpu_timeout(const char *where, uint32_t block,
+                                  int source_line, const uint32_t *end)
+{
+    sysLogPrintf(LOG_ERROR,
+                 "NV2A TIMEOUT where=%s block=%lu line=%d end=%p",
+                 where, (unsigned long)block, source_line, end);
+    sysLogPrintf(LOG_ERROR,
+                 "NV2A MMIO pmc=%08lx pfifo_intr=%08lx pfifo_status=%08lx put=%08lx get=%08lx",
+                 (unsigned long)nv2a_mmio_read(0x00000100u),
+                 (unsigned long)nv2a_mmio_read(0x00002100u),
+                 (unsigned long)nv2a_mmio_read(0x00003214u),
+                 (unsigned long)nv2a_mmio_read(0x00003240u),
+                 (unsigned long)nv2a_mmio_read(0x00003244u));
+    sysLogPrintf(LOG_ERROR,
+                 "NV2A MMIO pgraph_intr=%08lx nsource=%08lx status=%08lx trapped=%08lx data=%08lx:%08lx",
+                 (unsigned long)nv2a_mmio_read(0x00400100u),
+                 (unsigned long)nv2a_mmio_read(0x00400108u),
+                 (unsigned long)nv2a_mmio_read(0x00400700u),
+                 (unsigned long)nv2a_mmio_read(0x00400704u),
+                 (unsigned long)nv2a_mmio_read(0x0040070Cu),
+                 (unsigned long)nv2a_mmio_read(0x00400708u));
+
+    if (end) {
+        for (int i = -16; i < 0; i += 4) {
+            sysLogPrintf(LOG_ERROR,
+                         "NV2A PUSH %p: %08lx %08lx %08lx %08lx",
+                         end + i,
+                         (unsigned long)end[i + 0],
+                         (unsigned long)end[i + 1],
+                         (unsigned long)end[i + 2],
+                         (unsigned long)end[i + 3]);
+        }
+    }
+}
+
+static bool nv2a_wait_for_idle_trace(const char *where, uint32_t block,
+                                     int source_line, const uint32_t *end)
+{
+    const ULONGLONG start = KeQueryPerformanceCounter();
+    const ULONGLONG timeout = KeQueryPerformanceFrequency() * 2u;
+
+    while (pb_busy()) {
+        if (KeQueryPerformanceCounter() - start >= timeout) {
+            nv2a_dump_gpu_timeout(where, block, source_line, end);
+            return false;
+        }
+    }
+    return true;
+}
+
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+static void nv2a_pb_end_sync_trace(uint32_t *end, int source_line)
+{
+    static uint32_t block = 0;
+    const bool trace = g_frame_count <= 1 && g_gpu_sync_trace_active;
+    const uint32_t current = ++block;
+    if (trace) {
+        sysLogPrintf(LOG_NOTE, "NV2A SYNC %lu line=%d begin",
+                     (unsigned long)current, source_line);
+    }
+    pb_end(end);
+    if (trace) {
+        if (!nv2a_wait_for_idle_trace("pb_end", current, source_line, end)) {
+            // Preserve the failed command stream and register state. Continuing
+            // to submit methods after a GPU timeout destroys the useful fault.
+            for (;;) {
+            }
+        }
+        sysLogPrintf(LOG_NOTE, "NV2A SYNC %lu line=%d complete",
+                     (unsigned long)current, source_line);
+    }
+}
+#define pb_end(end) nv2a_pb_end_sync_trace((end), __LINE__)
+#endif
 
 struct NV2ACombinerCacheKey {
     uint64_t shader_id0;
@@ -512,13 +735,16 @@ static uint32_t nv2a_filter_word(bool source_linear)
 {
     // NV097 encodes minification in bits 16..23 and magnification in 24..27:
     //   1 = box/nearest, 2 = tent/linear.
-    // Do not set bits 13..15 here; those select the quincunx/Gaussian
-    // convolution kernels and visibly smear every texture.  LU_IMAGE textures
-    // have one physical level, so LOD0 nearest/bilinear is the complete state.
+    // Real NV2A also requires the normal filter-mode field at bit 13. XEMU
+    // accepted zero there, but hardware rejects the entire 0x1B14 method as
+    // invalid data. The separate convolution state used by pbkit's AA sample
+    // is 0x04074000 and visibly smears these textures; 0x?0?2000 is the
+    // hardware-safe ordinary box/tent state. LU_IMAGE textures have one
+    // physical level, so LOD0 nearest/bilinear is the complete state.
     // FILTER_THREE_POINT normally performs its third tap in a fragment shader;
     // bilinear is the closest fixed-function reconstruction on this backend.
     const bool linear = source_linear && g_filter_mode != FILTER_NONE;
-    return linear ? 0x02020000u : 0x01010000u;
+    return linear ? 0x02022000u : 0x01012000u;
 }
 
 static void nv2a_disable_texture(int tile)
@@ -527,7 +753,8 @@ static void nv2a_disable_texture(int tile)
     if (hw.valid && !hw.enabled) return;
 
     uint32_t *p = pb_begin();
-    p = pb_push1(p, NV097_TEXTURE_FORMAT(tile), 0x0001122au);
+    p = pb_push1(p, NV097_TEXTURE_FORMAT(tile),
+                 NV2A_LINEAR_A8R8G8B8_FORMAT);
     p = pb_push1(p, NV097_TEXTURE_CONTROL0(tile), 0);
     pb_end(p);
     hw = {};
@@ -536,13 +763,69 @@ static void nv2a_disable_texture(int tile)
 
 static void nv2a_bind_texture(int tile, NV2ATexture &t)
 {
+    uint32_t *data = nv2a_texture_data(t);
+    const uint32_t pitch = nv2a_texture_pitch(t);
+    const uint32_t storage_width = t.storage_width
+        ? t.storage_width : t.width;
+    const uint32_t storage_height = t.storage_height
+        ? t.storage_height : t.height;
+    const uint32_t offset = (uint32_t)(uintptr_t)data &
+                            NV2A_TEXTURE_PHYSICAL_MASK;
+    const uint64_t byte_count =
+        (uint64_t)pitch * (uint64_t)storage_height;
+    const uint32_t expected_format = t.swizzled
+        ? nv2a_swizzled_a8r8g8b8_format(storage_width, storage_height)
+        : NV2A_LINEAR_A8R8G8B8_FORMAT;
+
+    // LU_IMAGE state is unusually strict on real NV2A hardware. Reject a bad
+    // object before its FORMAT method can halt PGRAPH; XEMU is more forgiving
+    // of several of these invalid combinations.
+    const bool common_valid = data && t.width && t.height &&
+        t.width <= 4096u && t.height <= 4096u &&
+        storage_width && storage_height &&
+        storage_width <= 4096u && storage_height <= 4096u &&
+        pitch >= storage_width * 4u && pitch <= 0xffffu &&
+        (offset & 63u) == 0u &&
+        byte_count <= 0x04000000ull &&
+        (uint64_t)offset + byte_count <= 0x04000000ull;
+    const bool layout_valid = t.swizzled
+        ? nv2a_is_power_of_two(storage_width) &&
+          nv2a_is_power_of_two(storage_height)
+        : (pitch & 63u) == 0u;
+    const bool valid = common_valid && layout_valid;
+    if (!valid) {
+        sysLogPrintf(LOG_ERROR,
+                     "NV2A TEX INVALID tile=%d ptr=%p off=%08lx fmt=%08lx pitch=%lu size=%lux%lu storage=%lux%lu swz=%u bytes=%llu",
+                     tile, data, (unsigned long)offset,
+                     (unsigned long)t.fmt_word, (unsigned long)pitch,
+                     (unsigned long)t.width, (unsigned long)t.height,
+                     (unsigned long)storage_width,
+                     (unsigned long)storage_height,
+                     t.swizzled ? 1u : 0u,
+                     (unsigned long long)byte_count);
+        nv2a_disable_texture(tile);
+        return;
+    }
+
+    if (t.fmt_word != expected_format) {
+        sysLogPrintf(LOG_ERROR,
+                     "NV2A TEX FORMAT corrected tile=%d old=%08lx new=%08lx",
+                     tile, (unsigned long)t.fmt_word,
+                     (unsigned long)expected_format);
+        t.fmt_word = expected_format;
+    }
+
     uint32_t words[7];
-    words[0] = (uint32_t)(uintptr_t)nv2a_texture_data(t) & 0x03ffffffu;
-    words[1] = t.fmt_word;
-    words[2] = nv2a_texture_pitch(t) << 16;
-    words[3] = (t.width << 16) | t.height;
-    words[4] = ((uint32_t)t.address_s << 0) |
-               ((uint32_t)t.address_t << 8) | (3u << 16);
+    words[0] = offset;
+    words[1] = expected_format;
+    words[2] = pitch << 16;
+    words[3] = (storage_width << 16) | storage_height;
+    // NV2A LU_IMAGE textures are unnormalized NPOT surfaces and only support
+    // clamp addressing. Repeating/mirrored N64 textures use the swizzled path.
+    const uint8_t address_s = t.swizzled ? t.address_s : 3u;
+    const uint8_t address_t = t.swizzled ? t.address_t : 3u;
+    words[4] = ((uint32_t)address_s << 0) |
+               ((uint32_t)address_t << 8) | (3u << 16);
     words[5] = nv2a_filter_word(t.linear_filter);
     words[6] = 0x4003ffc0u;
     if (g_anisotropy > 1 && t.mipmaps) words[6] |= 0x10u;
@@ -553,15 +836,70 @@ static void nv2a_bind_texture(int tile, NV2ATexture &t)
         return;
     }
 
-    uint32_t *p = pb_begin();
-    p = pb_push1(p, NV097_TEXTURE_OFFSET(tile), words[0]);
-    p = pb_push1(p, NV097_TEXTURE_FORMAT(tile), words[1]);
-    p = pb_push1(p, NV097_TEXTURE_CONTROL1(tile), words[2]);
-    p = pb_push1(p, NV097_TEXTURE_IMAGE_RECT(tile), words[3]);
-    p = pb_push1(p, NV097_TEXTURE_ADDRESS(tile), words[4]);
-    p = pb_push1(p, NV097_TEXTURE_FILTER(tile), words[5]);
-    p = pb_push1(p, NV097_TEXTURE_CONTROL0(tile), words[6]);
-    pb_end(p);
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+    if (g_frame_count <= 1 && g_gpu_sync_trace_active) {
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A TEXBIND tile=%d ptr=%p off=%08lx fmt=%08lx pitch=%lu size=%lux%lu storage=%lux%lu swz=%u addr=%08lx filter=%08lx ctl=%08lx",
+                     tile, data, (unsigned long)words[0],
+                     (unsigned long)words[1], (unsigned long)pitch,
+                     (unsigned long)t.width, (unsigned long)t.height,
+                     (unsigned long)storage_width,
+                     (unsigned long)storage_height,
+                     t.swizzled ? 1u : 0u,
+                     (unsigned long)words[4], (unsigned long)words[5],
+                     (unsigned long)words[6]);
+
+        // OFFSET and FORMAT are one incrementing packet in pbkit's known-good
+        // hardware sequence. Split every remaining method so a hardware log
+        // identifies the exact rejected word without another broad iteration.
+        uint32_t *p = pb_begin();
+        p = pb_push2(p, NV097_TEXTURE_OFFSET(tile), words[0], words[1]);
+        pb_end(p);
+
+        sysLogPrintf(LOG_NOTE, "NV2A TEXMETHOD CONTROL1=%08lx",
+                     (unsigned long)words[2]);
+        p = pb_begin();
+        p = pb_push1(p, NV097_TEXTURE_CONTROL1(tile), words[2]);
+        pb_end(p);
+
+        sysLogPrintf(LOG_NOTE, "NV2A TEXMETHOD RECT=%08lx",
+                     (unsigned long)words[3]);
+        p = pb_begin();
+        p = pb_push1(p, NV097_TEXTURE_IMAGE_RECT(tile), words[3]);
+        pb_end(p);
+
+        sysLogPrintf(LOG_NOTE, "NV2A TEXMETHOD ADDRESS=%08lx",
+                     (unsigned long)words[4]);
+        p = pb_begin();
+        p = pb_push1(p, NV097_TEXTURE_ADDRESS(tile), words[4]);
+        pb_end(p);
+
+        sysLogPrintf(LOG_NOTE, "NV2A TEXMETHOD CONTROL0=%08lx",
+                     (unsigned long)words[6]);
+        p = pb_begin();
+        p = pb_push1(p, NV097_TEXTURE_CONTROL0(tile), words[6]);
+        pb_end(p);
+
+        sysLogPrintf(LOG_NOTE, "NV2A TEXMETHOD FILTER=%08lx",
+                     (unsigned long)words[5]);
+        p = pb_begin();
+        p = pb_push1(p, NV097_TEXTURE_FILTER(tile), words[5]);
+        pb_end(p);
+    } else
+#endif
+    {
+        // Match pbkit's hardware-tested mesh sample: OFFSET+FORMAT are a
+        // single incrementing packet, followed by NPOT geometry, wrapping,
+        // enable, then filtering.
+        uint32_t *p = pb_begin();
+        p = pb_push2(p, NV097_TEXTURE_OFFSET(tile), words[0], words[1]);
+        p = pb_push1(p, NV097_TEXTURE_CONTROL1(tile), words[2]);
+        p = pb_push1(p, NV097_TEXTURE_IMAGE_RECT(tile), words[3]);
+        p = pb_push1(p, NV097_TEXTURE_ADDRESS(tile), words[4]);
+        p = pb_push1(p, NV097_TEXTURE_CONTROL0(tile), words[6]);
+        p = pb_push1(p, NV097_TEXTURE_FILTER(tile), words[5]);
+        pb_end(p);
+    }
     ++g_dbg_texture_binds;
     hw.valid = true;
     hw.enabled = true;
@@ -589,6 +927,13 @@ static void nv2a_upload_texture(const uint8_t *rgba32_buf,
                                  uint32_t width, uint32_t height,
                                  bool gen_mipmaps)
 {
+    static bool traced_first_upload = false;
+    const bool trace_upload = !traced_first_upload || g_XboxExtTextureUploadTrace;
+    if (trace_upload) {
+        const char *kind = g_XboxExtTextureUploadTrace ? "external" : "first";
+        traced_first_upload = true;
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE 1 %s upload begin %ux%u", kind, width, height);
+    }
     // gfx_pc selects a tile immediately before uploading into it.
     const int tile = g_last_selected_tile;
     int tex_id = g_active_texture[tile];
@@ -597,9 +942,27 @@ static void nv2a_upload_texture(const uint8_t *rgba32_buf,
     NV2ATexture &t = g_textures[tex_id];
     t.alias_vram = nullptr;
     t.alias_pitch = 0;
+    t.external = g_XboxExtTextureUploadActive != 0;
+    t.external_id = t.external ? g_XboxExtTextureUploadId : UINT32_MAX;
 
-    const uint32_t pitch = (width * 4u + 63u) & ~63u;
-    const uint32_t bytes = pitch * height;
+    // Swizzled textures are the NV2A-native path for wrap/mirror sampling.
+    // N64 TMEM images are normally power-of-two; keep genuinely NPOT images
+    // linear and hardware-clamped. One-pixel dimensions are duplicated to a
+    // 2D swizzled surface so the 2D projective stage remains valid.
+    const bool swizzled = nv2a_is_power_of_two(width) &&
+                          nv2a_is_power_of_two(height);
+    const uint32_t storage_width = swizzled && width < 2u ? 2u : width;
+    const uint32_t storage_height = swizzled && height < 2u ? 2u : height;
+    const uint32_t pitch = swizzled
+        ? storage_width * 4u
+        : (width * 4u + 63u) & ~63u;
+    const uint32_t bytes = pitch * storage_height;
+    if (trace_upload) {
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A HWTRACE 2 allocation bytes=%u pitch=%u storage=%ux%u swz=%u",
+                     bytes, pitch, storage_width, storage_height,
+                     swizzled ? 1u : 0u);
+    }
 
     // Free old allocation if size changed
     if (t.vram) {
@@ -615,6 +978,9 @@ static void nv2a_upload_texture(const uint8_t *rgba32_buf,
         0xFFFFFFFF,   // highest acceptable
         0,            // no alignment requirement beyond page
         PAGE_READWRITE | PAGE_WRITECOMBINE);
+    if (trace_upload) {
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE 3 allocation=%p", t.vram);
+    }
 
     if (!t.vram) {
         sysLogPrintf(LOG_ERROR, "NV2A: MmAllocateContiguousMemory failed (%ux%u)", width, height);
@@ -629,44 +995,88 @@ static void nv2a_upload_texture(const uint8_t *rgba32_buf,
         return;
     }
 
-    // Copy RGBA data — NV2A uses ARGB internally, so we swizzle
-    for (uint32_t y = 0; y < height; ++y) {
-        const uint8_t *src = rgba32_buf + y * width * 4u;
-        uint8_t *dst = (uint8_t *)t.vram + y * pitch;
-        for (uint32_t x = 0; x < width; ++x) {
-            uint8_t r = src[0], g = src[1], b = src[2], a = src[3];
-            dst[0] = b;
-            dst[1] = g;
-            dst[2] = r;
-            dst[3] = a;
-            src += 4;
-            dst += 4;
+    // Convert RGBA to the A8R8G8B8 byte layout used by NV2A. Native textures
+    // are Morton/Z ordered; linear NPOT surfaces retain their padded pitch.
+    if (swizzled) {
+        uint32_t mask_x, mask_y;
+        nv2a_generate_swizzle_masks(storage_width, storage_height,
+                                    mask_x, mask_y);
+        uint32_t offset_y = 0;
+        for (uint32_t y = 0; y < storage_height; ++y) {
+            const uint32_t source_y = y < height ? y : height - 1u;
+            uint32_t offset_x = 0;
+            for (uint32_t x = 0; x < storage_width; ++x) {
+                const uint32_t source_x = x < width ? x : width - 1u;
+                const uint8_t *src = rgba32_buf +
+                    (source_y * width + source_x) * 4u;
+                uint8_t *dst = (uint8_t *)t.vram +
+                    (offset_x + offset_y) * 4u;
+                dst[0] = src[2];
+                dst[1] = src[1];
+                dst[2] = src[0];
+                dst[3] = src[3];
+                offset_x = (offset_x - mask_x) & mask_x;
+            }
+            offset_y = (offset_y - mask_y) & mask_y;
         }
-        memset(dst, 0, pitch - width * 4u);
+    } else {
+        for (uint32_t y = 0; y < height; ++y) {
+            const uint8_t *src = rgba32_buf + y * width * 4u;
+            uint8_t *dst = (uint8_t *)t.vram + y * pitch;
+            for (uint32_t x = 0; x < width; ++x) {
+                const uint8_t r = src[0], g = src[1];
+                const uint8_t b = src[2], a = src[3];
+                dst[0] = b;
+                dst[1] = g;
+                dst[2] = r;
+                dst[3] = a;
+                src += 4;
+                dst += 4;
+            }
+            memset(dst, 0, pitch - width * 4u);
+        }
+    }
+    if (trace_upload) {
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE 4 conversion complete");
     }
 
     t.width  = width;
     t.height = height;
+    t.storage_width = storage_width;
+    t.storage_height = storage_height;
     t.pitch  = pitch;
-    t.address_s = 1; // repeat
-    t.address_t = 1;
+    t.swizzled = swizzled;
+    if (!t.address_s) t.address_s = 3;
+    if (!t.address_t) t.address_t = 3;
     // Linear NPOT textures cannot carry a conventional mip chain. Remember
     // the request so anisotropy/filter state remains coherent while sampling
     // the base level, which is the only level N64 TMEM uploads require here.
     t.mipmaps = gen_mipmaps;
     ++t.content_version;
 
-    // 2D, one mip level, linear/NPOT A8R8G8B8 in pbkit's DMA context.
-    t.fmt_word = 0x0001122au;
+    t.fmt_word = swizzled
+        ? nv2a_swizzled_a8r8g8b8_format(storage_width, storage_height)
+        : NV2A_LINEAR_A8R8G8B8_FORMAT;
 
     // The initial select happens before the allocation exists and therefore
     // disables the unit. Rebind now that the texture has valid storage/state.
     nv2a_select_texture(tile, (uint32_t)tex_id, t.linear_filter);
+    if (trace_upload) {
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE 5 texture rebound");
+    }
 }
 
 static void nv2a_prepare_textures_for_draw(void)
 {
     uint32_t texture_program = 0;
+
+    for (int tile = 0; tile < TEXTURE_TILE_COUNT; ++tile) {
+        g_draw_texture_id[tile] = -1;
+        g_draw_texture_external[tile] = false;
+        g_draw_texture_external_id[tile] = UINT32_MAX;
+        g_draw_texture_width[tile] = 0;
+        g_draw_texture_height[tile] = 0;
+    }
 
     for (int tile = 0; tile < TEXTURE_TILE_COUNT; ++tile) {
         if (!g_current_shader->used_textures[tile]) continue;
@@ -683,6 +1093,9 @@ static void nv2a_prepare_textures_for_draw(void)
             if (blurred) draw_texture = blurred;
         }
         nv2a_bind_texture(tile, *draw_texture);
+        g_draw_texture_id[tile] = texture_id;
+        g_draw_texture_external[tile] = draw_texture->external;
+        g_draw_texture_external_id[tile] = draw_texture->external_id;
         g_draw_texture_width[tile] = draw_texture->width;
         g_draw_texture_height[tile] = draw_texture->height;
         if (tile == 0) {
@@ -1271,8 +1684,7 @@ static uint8_t nv2a_next_noise_stencil_ref(void)
 static void nv2a_begin_noise_mask(uint8_t ref)
 {
     uint32_t *p = pb_begin();
-    p = pb_push1(p, NV097_SET_CONTROL0,
-                 NV097_SET_CONTROL0_STENCIL_WRITE_ENABLE);
+    p = pb_push1(p, NV097_SET_CONTROL0, nv2a_control0(true));
     p = pb_push1(p, NV097_SET_STENCIL_TEST_ENABLE, 1);
     p = pb_push1(p, NV097_SET_STENCIL_MASK, 0xFFu);
     p = pb_push1(p, NV097_SET_STENCIL_FUNC,
@@ -1299,7 +1711,7 @@ static void nv2a_begin_noise_color(uint8_t ref)
         NV097_SET_COLOR_MASK_RED_WRITE_ENABLE |
         NV097_SET_COLOR_MASK_ALPHA_WRITE_ENABLE;
     uint32_t *p = pb_begin();
-    p = pb_push1(p, NV097_SET_CONTROL0, 0);
+    p = pb_push1(p, NV097_SET_CONTROL0, nv2a_control0(false));
     p = pb_push1(p, NV097_SET_STENCIL_TEST_ENABLE, 1);
     p = pb_push1(p, NV097_SET_STENCIL_MASK, 0);
     p = pb_push1(p, NV097_SET_STENCIL_FUNC,
@@ -1322,7 +1734,7 @@ static void nv2a_end_noise_stencil(void)
 {
     uint32_t *p = pb_begin();
     p = pb_push1(p, NV097_SET_STENCIL_TEST_ENABLE, 0);
-    p = pb_push1(p, NV097_SET_CONTROL0, 0);
+    p = pb_push1(p, NV097_SET_CONTROL0, nv2a_control0(false));
     p = pb_push1(p, NV097_SET_STENCIL_MASK, 0xFFu);
     p = pb_push1(p, NV097_SET_DEPTH_WRITE_ENABLE,
                  g_rs.depth_write ? 1u : 0u);
@@ -1341,22 +1753,29 @@ static void nv2a_scale_linear_texcoord(int tile, float &s, float &t,
     }
 
     // gfx_pc supplies normalized coordinates, matching sampler2D on the GL
-    // backend. NV2A LU_IMAGE (linear/NPOT) textures use texel-space input;
-    // XEMU performs the same normalization when translating the texture stage.
+    // backend. Native swizzled textures consume those coordinates directly;
+    // LU_IMAGE (linear/NPOT) textures use texel-space input.
+    const NV2ATexture &texture = g_textures[texture_id];
     const uint32_t draw_width = g_draw_texture_width[tile]
-        ? g_draw_texture_width[tile] : g_textures[texture_id].width;
+        ? g_draw_texture_width[tile] : texture.width;
     const uint32_t draw_height = g_draw_texture_height[tile]
-        ? g_draw_texture_height[tile] : g_textures[texture_id].height;
-    const float width = (float)draw_width;
-    const float height = (float)draw_height;
-    s *= width;
-    t *= height;
+        ? g_draw_texture_height[tile] : texture.height;
+    const float scale_s = texture.swizzled
+        ? (float)draw_width / (float)(texture.storage_width
+            ? texture.storage_width : texture.width)
+        : (float)draw_width;
+    const float scale_t = texture.swizzled
+        ? (float)draw_height / (float)(texture.storage_height
+            ? texture.storage_height : texture.height)
+        : (float)draw_height;
+    s *= scale_s;
+    t *= scale_t;
     if (clamp_s) {
-        max_s *= width;
+        max_s *= scale_s;
         if (s > max_s) s = max_s;
     }
     if (clamp_t) {
-        max_t *= height;
+        max_t *= scale_t;
         if (t > max_t) t = max_t;
     }
 }
@@ -1387,6 +1806,14 @@ static void nv2a_set_sampler_parameters(int sampler, bool linear_filter,
     t.address_s = address_mode(cms);
     t.address_t = address_mode(cmt);
     t.mipmaps = mipmaps && g_mipmap_mode != MIPMAP_DISABLED;
+    // gfx_pc configures a newly reserved texture before uploading its pixels.
+    // Preserve the requested sampler state, but do not submit OFFSET/FORMAT
+    // until storage and dimensions exist. Real NV2A hardware halts PGRAPH on
+    // the resulting zero FORMAT; XEMU silently accepted it.
+    if (!nv2a_texture_data(t)) {
+        nv2a_disable_texture(sampler);
+        return;
+    }
     nv2a_bind_texture(sampler, t);
 }
 
@@ -1557,7 +1984,12 @@ static float nv2a_clip_distance(const float *v, unsigned plane)
         case 1: return v[3] - v[0]; // x <=  w
         case 2: return v[1] + v[3]; // y >= -w
         case 3: return v[3] - v[1]; // y <=  w
-        case 4: return v[2];        // z >=  0 (fast3d's Xbox clip convention)
+        // fast3d supplies OpenGL clip-space vertices. The passthrough vertex
+        // program maps NDC Z through the Xbox 0..1 viewport itself, so the
+        // CPU clip volume must retain OpenGL's -w <= z <= w convention here.
+        // Clipping against z >= 0 discarded menu/logo and other textured
+        // quads before they ever reached the NV2A.
+        case 4: return v[2] + v[3]; // z >= -w
         default: return v[3] - v[2]; // z <= w
     }
 }
@@ -1740,14 +2172,25 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     if (!g_stream_vertices) return;
 
     if (!g_stream_attributes_bound) {
-        const uint32_t stride_bytes = sizeof(NV2AStreamVertex);
         auto set_attribute = [](uint32_t index, uint32_t type,
                                 uint32_t size, const void *data) {
+            const uint32_t format =
+                type | (size << 4) | (sizeof(NV2AStreamVertex) << 8);
+            const uint32_t offset =
+                (uint32_t)(uintptr_t)data & 0x03ffffffu;
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+            if (g_frame_count <= 1 && g_gpu_sync_trace_active) {
+                sysLogPrintf(LOG_NOTE,
+                             "NV2A ATTR index=%lu format=%08lx offset=%08lx",
+                             (unsigned long)index, (unsigned long)format,
+                             (unsigned long)offset);
+            }
+#endif
             uint32_t *q = pb_begin();
             q = pb_push1(q, NV097_SET_VERTEX_DATA_ARRAY_FORMAT + index * 4u,
-                         type | (size << 4) | (stride_bytes << 8));
+                         format);
             q = pb_push1(q, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + index * 4u,
-                         (uint32_t)(uintptr_t)data & 0x03ffffffu);
+                         offset);
             pb_end(q);
         };
         set_attribute(0, NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_F, 4,
@@ -1764,9 +2207,203 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         g_stream_attributes_bound = true;
     }
 
-    auto emit_stream_range = [](uint32_t first_vertex, uint32_t count) {
+    auto emit_stream_range = [&](uint32_t first_vertex, uint32_t count) {
         if (count == 0) return;
+
+        bool has_game_texture = false;
+        bool has_external_texture = false;
+        for (int tile = 0; tile < TEXTURE_TILE_COUNT; ++tile) {
+            const bool stage_active = prg.used_textures[tile] &&
+                g_draw_texture_id[tile] > 0 &&
+                g_hw_texture[tile].valid && g_hw_texture[tile].enabled;
+            has_game_texture |= stage_active;
+            has_external_texture |= stage_active &&
+                g_draw_texture_external[tile];
+        }
+
+        const char *proof_kind = nullptr;
+        uint32_t proof_block = 0;
+        if (g_texture_program != 0 && has_game_texture) {
+            if (has_external_texture && !g_logged_external_texture_proof) {
+                proof_kind = "external";
+                proof_block = 2;
+                g_logged_external_texture_proof = true;
+            } else if (!has_external_texture &&
+                       !g_logged_stock_texture_proof) {
+                proof_kind = "stock";
+                proof_block = 1;
+                g_logged_stock_texture_proof = true;
+            }
+        }
+
+        if (proof_kind) {
+            sysLogPrintf(LOG_NOTE,
+                         "NV2A TEXPROOF begin kind=%s build=%s frame=%lu first=%lu count=%lu texprog=%08lx shader_upload_serial=%lu",
+                         proof_kind, NV2A_RUNTIME_BUILD_ID,
+                         (unsigned long)g_frame_count,
+                         (unsigned long)first_vertex, (unsigned long)count,
+                         (unsigned long)g_texture_program,
+                         (unsigned long)g_shader_abi_upload_serial);
+            for (uint32_t stage = 0; stage < NV2A_TEXTURE_STAGE_COUNT;
+                 ++stage) {
+                const NV2AHardwareTextureState &hw = g_hw_texture[stage];
+                const bool game_stage = stage < TEXTURE_TILE_COUNT;
+                sysLogPrintf(LOG_NOTE,
+                             "NV2A TEXPROOF kind=%s stage=%lu used=%u backend=%d external=%u extid=%08lx size=%lux%lu valid=%u enabled=%u words=%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx",
+                             proof_kind, (unsigned long)stage,
+                             game_stage && prg.used_textures[stage] ? 1u : 0u,
+                             game_stage ? g_draw_texture_id[stage] : -1,
+                             game_stage && g_draw_texture_external[stage]
+                                 ? 1u : 0u,
+                             (unsigned long)(game_stage
+                                 ? g_draw_texture_external_id[stage]
+                                 : UINT32_MAX),
+                             (unsigned long)(game_stage
+                                 ? g_draw_texture_width[stage] : 0u),
+                             (unsigned long)(game_stage
+                                 ? g_draw_texture_height[stage] : 0u),
+                             hw.valid ? 1u : 0u, hw.enabled ? 1u : 0u,
+                             (unsigned long)hw.words[0],
+                             (unsigned long)hw.words[1],
+                             (unsigned long)hw.words[2],
+                             (unsigned long)hw.words[3],
+                             (unsigned long)hw.words[4],
+                             (unsigned long)hw.words[5],
+                             (unsigned long)hw.words[6]);
+            }
+            const uint32_t inspect_count = count < 3u ? count : 3u;
+            for (uint32_t i = 0; i < inspect_count; ++i) {
+                const NV2AStreamVertex &v =
+                    g_stream_vertices[first_vertex + i];
+                sysLogPrintf(LOG_NOTE,
+                             "NV2A TEXPROOF kind=%s vertex=%lu pos=%08lx,%08lx,%08lx,%08lx tex0=%08lx,%08lx tex1=%08lx,%08lx",
+                             proof_kind,
+                             (unsigned long)(first_vertex + i),
+                             (unsigned long)f2u(v.position[0]),
+                             (unsigned long)f2u(v.position[1]),
+                             (unsigned long)f2u(v.position[2]),
+                             (unsigned long)f2u(v.position[3]),
+                             (unsigned long)f2u(v.tex0[0]),
+                             (unsigned long)f2u(v.tex0[1]),
+                             (unsigned long)f2u(v.tex1[0]),
+                             (unsigned long)f2u(v.tex1[1]));
+            }
+        }
+
+        auto complete_texture_proof = [&](const uint32_t *end) {
+            if (!proof_kind) return;
+            const bool idle = nv2a_wait_for_idle_trace(
+                "texture_proof_draw", proof_block, __LINE__, end);
+            sysLogPrintf(idle ? LOG_NOTE : LOG_ERROR,
+                         "NV2A TEXPROOF complete kind=%s build=%s gpu_idle=%u texture_stage_enabled=1 c5_upload_serial=%lu",
+                         proof_kind, NV2A_RUNTIME_BUILD_ID,
+                         idle ? 1u : 0u,
+                         (unsigned long)g_shader_abi_upload_serial);
+        };
+
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+        if (g_frame_count <= 1 && g_gpu_sync_trace_active) {
+            const uint32_t stream_offset =
+                (uint32_t)(uintptr_t)g_stream_vertices & 0x03ffffffu;
+            sysLogPrintf(LOG_NOTE,
+                         "NV2A DRAWSTATE first=%lu count=%lu cursor=%lu stream=%p offset=%08lx stride=%lu texprog=%08lx",
+                         (unsigned long)first_vertex, (unsigned long)count,
+                         (unsigned long)g_stream_vertex_cursor,
+                         g_stream_vertices, (unsigned long)stream_offset,
+                         (unsigned long)sizeof(NV2AStreamVertex),
+                         (unsigned long)g_texture_program);
+            for (uint32_t stage = 0; stage < NV2A_TEXTURE_STAGE_COUNT;
+                 ++stage) {
+                const NV2AHardwareTextureState &hw = g_hw_texture[stage];
+                sysLogPrintf(LOG_NOTE,
+                             "NV2A DRAWSTATE TEX%lu valid=%u enabled=%u words=%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx",
+                             (unsigned long)stage, hw.valid ? 1u : 0u,
+                             hw.enabled ? 1u : 0u,
+                             (unsigned long)hw.words[0],
+                             (unsigned long)hw.words[1],
+                             (unsigned long)hw.words[2],
+                             (unsigned long)hw.words[3],
+                             (unsigned long)hw.words[4],
+                             (unsigned long)hw.words[5],
+                             (unsigned long)hw.words[6]);
+            }
+            const uint32_t inspect_count = count < 3u ? count : 3u;
+            for (uint32_t i = 0; i < inspect_count; ++i) {
+                const NV2AStreamVertex &v =
+                    g_stream_vertices[first_vertex + i];
+                sysLogPrintf(LOG_NOTE,
+                             "NV2A DRAWSTATE V%lu pos=%08lx,%08lx,%08lx,%08lx color=%08lx,%08lx tex=%08lx,%08lx/%08lx,%08lx",
+                             (unsigned long)(first_vertex + i),
+                             (unsigned long)f2u(v.position[0]),
+                             (unsigned long)f2u(v.position[1]),
+                             (unsigned long)f2u(v.position[2]),
+                             (unsigned long)f2u(v.position[3]),
+                             (unsigned long)v.diffuse,
+                             (unsigned long)v.specular,
+                             (unsigned long)f2u(v.tex0[0]),
+                             (unsigned long)f2u(v.tex0[1]),
+                             (unsigned long)f2u(v.tex1[0]),
+                             (unsigned long)f2u(v.tex1[1]));
+            }
+
+            // CPU writes the write-combined streaming array continuously.
+            // Invalidate Kelvin's vertex fetch cache before drawing from the
+            // newly written range, then isolate BEGIN, every DRAW_ARRAYS, and
+            // END so a real-Xbox PGRAPH trap identifies one exact method.
+            uint32_t *trace = pb_begin();
+            trace = pb_push1(trace, NV097_BREAK_VERTEX_BUFFER_CACHE, 0);
+            pb_end(trace);
+
+            trace = pb_begin();
+            trace = pb_push1(trace, NV097_SET_BEGIN_END,
+                             NV097_SET_BEGIN_END_OP_TRIANGLES);
+            pb_end(trace);
+
+            uint32_t start = first_vertex;
+            uint32_t remaining = count;
+            while (remaining) {
+                const uint32_t draw_count =
+                    remaining > 256u ? 256u : remaining;
+                const uint32_t draw_word =
+                    ((draw_count - 1u) << 24) | start;
+                sysLogPrintf(LOG_NOTE,
+                             "NV2A DRAWMETHOD start=%lu count=%lu word=%08lx",
+                             (unsigned long)start,
+                             (unsigned long)draw_count,
+                             (unsigned long)draw_word);
+                trace = pb_begin();
+                trace = pb_push1(trace,
+                                 0x40000000u | NV097_DRAW_ARRAYS,
+                                 draw_word);
+                pb_end(trace);
+                start += draw_count;
+                remaining -= draw_count;
+            }
+
+            trace = pb_begin();
+            trace = pb_push1(trace, NV097_SET_BEGIN_END,
+                             NV097_SET_BEGIN_END_OP_END);
+            pb_end(trace);
+
+            bool textured_draw = g_texture_program != 0;
+            for (uint32_t stage = 0;
+                 stage < NV2A_TEXTURE_STAGE_COUNT && !textured_draw;
+                 ++stage) {
+                textured_draw = g_hw_texture[stage].valid &&
+                                g_hw_texture[stage].enabled;
+            }
+            if (textured_draw) {
+                sysLogPrintf(LOG_NOTE,
+                             "NV2A TRACE CUTOFF first textured draw complete");
+                g_gpu_sync_trace_active = false;
+            }
+            complete_texture_proof(trace);
+            return;
+        }
+#endif
+
         uint32_t *p = pb_begin();
+        p = pb_push1(p, NV097_BREAK_VERTEX_BUFFER_CACHE, 0);
         p = pb_push1(p, NV097_SET_BEGIN_END, NV097_SET_BEGIN_END_OP_TRIANGLES);
         uint32_t start = first_vertex;
         uint32_t remaining = count;
@@ -1779,6 +2416,7 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         }
         p = pb_push1(p, NV097_SET_BEGIN_END, NV097_SET_BEGIN_END_OP_END);
         pb_end(p);
+        complete_texture_proof(p);
     };
 
     const bool spatial_noise_coverage = prg.cc.opt_noise &&
@@ -1944,6 +2582,13 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
 
 static void nv2a_init(void)
 {
+    unsigned sync_trace = 0;
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+    g_gpu_sync_trace_active = true;
+    sync_trace = 1;
+#endif
+    sysLogPrintf(LOG_NOTE, "NV2A TRACE BUILD id=%s sync=%u",
+                 NV2A_RUNTIME_BUILD_ID, sync_trace);
     memset(g_textures, 0, sizeof(g_textures));
     memset(g_framebuffers, 0, sizeof(g_framebuffers));
     g_framebuffers[0].used = true;
@@ -1958,6 +2603,25 @@ static void nv2a_init(void)
     g_combiner_cache_valid = false;
     memset(g_draw_texture_width, 0, sizeof(g_draw_texture_width));
     memset(g_draw_texture_height, 0, sizeof(g_draw_texture_height));
+    g_draw_texture_id[0] = g_draw_texture_id[1] = -1;
+    memset(g_draw_texture_external, 0, sizeof(g_draw_texture_external));
+    g_draw_texture_external_id[0] = UINT32_MAX;
+    g_draw_texture_external_id[1] = UINT32_MAX;
+    g_logged_stock_texture_proof = false;
+    g_logged_external_texture_proof = false;
+    g_logged_shader_abi_upload = false;
+    g_shader_abi_upload_serial = 0;
+    g_perf_frame_started = 0;
+    g_perf_submit_ticks = 0;
+    g_perf_gpu_drain_ticks = 0;
+    g_perf_queue_ticks = 0;
+    g_perf_submit_max = 0;
+    g_perf_gpu_drain_max = 0;
+    g_perf_queue_max = 0;
+    g_perf_previous_vbl = pb_get_vbl_counter();
+    g_perf_vbl_total = 0;
+    g_perf_vbl_max = 0;
+    g_perf_frame_samples = 0;
     g_blur_texture = {};
     g_blur_source_id = -1;
     g_blur_source_version = 0;
@@ -2008,7 +2672,7 @@ static void nv2a_init(void)
     p = pb_begin();
     p = pb_push1(p, NV097_SET_BLEND_ENABLE, 0);
     p = pb_push1(p, NV097_SET_STENCIL_TEST_ENABLE, 0);
-    p = pb_push1(p, NV097_SET_CONTROL0, 0);
+    p = pb_push1(p, NV097_SET_CONTROL0, nv2a_control0(false));
     p = pb_push1(p, NV097_SET_COLOR_MASK,
                  NV097_SET_COLOR_MASK_BLUE_WRITE_ENABLE |
                  NV097_SET_COLOR_MASK_GREEN_WRITE_ENABLE |
@@ -2097,14 +2761,61 @@ static void nv2a_upload_viewport_constants(void)
         (float)((phase >> 8) & 255u),
     };
 
+    // cgc emits `#const c[5] = 0 1` for the literal Z/Q components in
+    // pdx_passthrough.vs.cg. Generated vertex-program instructions do not
+    // contain that constant data, so it is part of the shader ABI and must be
+    // uploaded explicitly. In particular, TEX0/TEX1 Q must be 1 for the
+    // 2D_PROJECTIVE texture stages; leaving c[5] undefined makes all texture
+    // lookups undefined while untextured vertex colors continue to render.
+    const float shader_literals[4] = { 0.0f, 1.0f, 0.0f, 0.0f };
+    const uint32_t upload_serial = ++g_shader_abi_upload_serial;
+    const bool log_shader_abi = !g_logged_shader_abi_upload;
+    if (log_shader_abi) {
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A SHADER ABI begin build=%s serial=%lu load=96 vectors=6 dwords=24",
+                     NV2A_RUNTIME_BUILD_ID, (unsigned long)upload_serial);
+        for (unsigned vector = 0; vector < 4; ++vector) {
+            const float *c = viewport + vector * 4u;
+            sysLogPrintf(LOG_NOTE,
+                         "NV2A SHADER ABI c%u=%08lx,%08lx,%08lx,%08lx",
+                         vector,
+                         (unsigned long)f2u(c[0]), (unsigned long)f2u(c[1]),
+                         (unsigned long)f2u(c[2]), (unsigned long)f2u(c[3]));
+        }
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A SHADER ABI c4=%08lx,%08lx,%08lx,%08lx",
+                     (unsigned long)f2u(noise_transform[0]),
+                     (unsigned long)f2u(noise_transform[1]),
+                     (unsigned long)f2u(noise_transform[2]),
+                     (unsigned long)f2u(noise_transform[3]));
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A SHADER ABI c5=%08lx,%08lx,%08lx,%08lx q_literal=%08lx",
+                     (unsigned long)f2u(shader_literals[0]),
+                     (unsigned long)f2u(shader_literals[1]),
+                     (unsigned long)f2u(shader_literals[2]),
+                     (unsigned long)f2u(shader_literals[3]),
+                     (unsigned long)f2u(shader_literals[1]));
+    }
+
     uint32_t *p = pb_begin();
     p = pb_push1(p, NV097_SET_TRANSFORM_CONSTANT_LOAD, 96);
-    pb_push(p++, NV097_SET_TRANSFORM_CONSTANT, 20);
+    pb_push(p++, NV097_SET_TRANSFORM_CONSTANT, 24);
     memcpy(p, viewport, sizeof(viewport));
     p += 16;
     memcpy(p, noise_transform, sizeof(noise_transform));
     p += 4;
+    memcpy(p, shader_literals, sizeof(shader_literals));
+    p += 4;
     pb_end(p);
+    if (log_shader_abi) {
+        const bool idle = nv2a_wait_for_idle_trace(
+            "shader_abi_c5", upload_serial, __LINE__, p);
+        sysLogPrintf(idle ? LOG_NOTE : LOG_ERROR,
+                     "NV2A SHADER ABI complete build=%s serial=%lu gpu_idle=%u c5_uploaded=1",
+                     NV2A_RUNTIME_BUILD_ID, (unsigned long)upload_serial,
+                     idle ? 1u : 0u);
+        g_logged_shader_abi_upload = true;
+    }
 }
 
 static void nv2a_set_passthrough_transform(void)
@@ -2140,12 +2851,142 @@ uint32_t g_SPXBFramebufferWidth = 0;
 uint32_t g_SPXBFramebufferHeight = 0;
 }
 
+// Synchronous stage loading runs outside the normal scheduler/render loop.
+// This tiny pbkit-only presenter mirrors Unreal Tournament Xbox's cooperative
+// eight-dot loader without relying on fast3d state that is being torn down.
+static bool g_loading_active = false;
+static unsigned g_loading_step = 0;
+static unsigned g_loading_draw_count = 0;
+static ULONGLONG g_loading_started = 0;
+static ULONGLONG g_loading_last_draw = 0;
+
+static void nv2a_draw_loading_frame(bool force)
+{
+    if (!g_loading_active) return;
+
+    const ULONGLONG now = KeQueryPerformanceCounter();
+    const ULONGLONG frequency = KeQueryPerformanceFrequency();
+    if (!force && g_loading_last_draw &&
+            now - g_loading_last_draw < frequency / 10u) {
+        return;
+    }
+
+    // Do not reset a pushbuffer that the GPU is still consuming. The previous
+    // game frame or activity frame has already been queued for VBlank.
+    while (pb_busy()) {
+    }
+    pb_reset();
+
+    DWORD *target = pb_back_buffer();
+    const DWORD pitch = pb_back_buffer_pitch();
+    const int width = (int)pb_back_buffer_width();
+    const int height = (int)pb_back_buffer_height();
+    const float scale = (float)height / 480.0f;
+    const float cx = (float)width * 0.5f;
+    const float cy = (float)height - 30.0f * scale;
+    const float radius = 13.0f * scale;
+    const int dot = (int)(3.5f * scale + 0.5f) < 3
+        ? 3 : (int)(3.5f * scale + 0.5f);
+    static const float offsets[8][2] = {
+        { 0.0f, -1.0f }, { 0.707f, -0.707f }, { 1.0f, 0.0f }, { 0.707f, 0.707f },
+        { 0.0f,  1.0f }, {-0.707f,  0.707f }, {-1.0f, 0.0f }, {-0.707f,-0.707f },
+    };
+
+    pb_fill(0, 0, width, height, 0xFF000000u);
+    for (unsigned i = 0; i < 8; ++i) {
+        const unsigned age = (i - (g_loading_step & 7u) + 8u) & 7u;
+        const unsigned red = 18u + (7u - age) * 4u;
+        const unsigned green = 80u + (7u - age) * 18u;
+        const unsigned blue = 135u + (7u - age) * 14u;
+        const DWORD color = 0xFF000000u | (red << 16) | (green << 8) | blue;
+        const int x = (int)(cx + offsets[i][0] * radius + 0.5f);
+        const int y = (int)(cy + offsets[i][1] * radius + 0.5f);
+        pb_fill(x - dot, y - dot, dot * 2, dot * 2, color);
+    }
+
+    while (pb_busy()) {
+    }
+    while (pb_finished()) {
+    }
+
+    // Keep the non-focus-stealing XEMU harness pointed at the completed load
+    // frame, just as finish_render does for normal game frames.
+    g_last_presented_fb = target;
+    g_last_presented_pitch = pitch;
+    g_SPXBFramebufferData = (uint32_t)(uintptr_t)target;
+    g_SPXBFramebufferPitch = pitch;
+    g_SPXBFramebufferWidth = (uint32_t)width;
+    g_SPXBFramebufferHeight = (uint32_t)height;
+
+    g_loading_last_draw = now;
+    ++g_loading_draw_count;
+    if (g_loading_draw_count <= 16u || (g_loading_draw_count & 7u) == 0u) {
+        const unsigned long elapsed_ms = frequency
+            ? (unsigned long)((now - g_loading_started) * 1000u / frequency) : 0;
+        sysLogPrintf(LOG_NOTE,
+                     "loading: frame=%u step=%u elapsed_ms=%lu",
+                     g_loading_draw_count, g_loading_step, elapsed_ms);
+    }
+}
+
+extern "C" void gfx_xbox_loading_begin(int from_stage, int to_stage)
+{
+    if (g_loading_active) return;
+    g_loading_active = true;
+    g_loading_step = 0;
+    g_loading_draw_count = 0;
+    g_loading_started = KeQueryPerformanceCounter();
+    g_loading_last_draw = 0;
+    sysLogPrintf(LOG_NOTE, "loading: begin from=%d to=%d", from_stage, to_stage);
+    nv2a_draw_loading_frame(true);
+    g_loading_step = 1;
+}
+
+extern "C" void gfx_xbox_loading_pulse(void)
+{
+    if (!g_loading_active) return;
+    const unsigned previous_count = g_loading_draw_count;
+    nv2a_draw_loading_frame(false);
+    if (g_loading_draw_count != previous_count) {
+        g_loading_step = (g_loading_step + 1u) & 7u;
+    }
+}
+
+extern "C" void gfx_xbox_loading_end(int stage)
+{
+    if (!g_loading_active) return;
+    const ULONGLONG now = KeQueryPerformanceCounter();
+    const ULONGLONG frequency = KeQueryPerformanceFrequency();
+    const unsigned long elapsed_ms = frequency
+        ? (unsigned long)((now - g_loading_started) * 1000u / frequency) : 0;
+    sysLogPrintf(LOG_NOTE, "loading: end stage=%d frames=%u elapsed_ms=%lu",
+                 stage, g_loading_draw_count, elapsed_ms);
+    g_loading_active = false;
+}
+
 static void nv2a_start_frame(void)
 {
-    pb_wait_for_vbl();
+    static bool traced_first_frame = false;
+    const bool trace_frame = !traced_first_frame;
+    if (trace_frame) {
+        traced_first_frame = true;
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F1 first frame begin");
+    }
+    // pb_finished() queues completed buffers for the VBlank ISR. Waiting for
+    // another VBlank here serializes CPU submission behind scanout and can add
+    // almost a full refresh interval before every 720p frame. pbkit explicitly
+    // permits drawing ahead; its three-buffer queue supplies back-pressure.
+    g_perf_frame_started = KeQueryPerformanceCounter();
     pb_reset();
+    if (trace_frame) {
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F1b pushbuffer reset complete");
+    }
     g_stream_vertex_cursor = 0;
-    pb_target_back_buffer();
+
+    // pb_init() selects the first back buffer, and pb_finished() selects the
+    // next one at the end of every frame. Reissuing pb_target_back_buffer()
+    // here is redundant and, at 720p on original hardware, can wedge the NV2A
+    // while pbkit reprograms its surface DMA objects a second time.
     g_current_framebuffer = FB_BACK_BUFFER;
     g_target_width = pb_back_buffer_width();
     g_target_height = pb_back_buffer_height();
@@ -2165,20 +3006,13 @@ static void nv2a_start_frame(void)
         g_SPXBFramebufferHeight = pb_back_buffer_height();
     }
 
-    uint32_t *p = pb_begin();
-    // Clear colour + depth
-    p = pb_push1(p, NV097_SET_SURFACE_CLIP_HORIZONTAL, (pb_back_buffer_width()  << 16));
-    p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL,   (pb_back_buffer_height() << 16));
-    // NV2A's native W buffer is the hardware equivalent for this pre-divided
-    // clip-space stream. Using transformed Z here rejects most distant city
-    // geometry because the NV2A rasterizer consumes screen-space vertex output.
-    p = pb_push1(p, NV20_TCL_PRIMITIVE_3D_W_YUV_FPZ_FLAGS, 0x00110001u);
-    pb_end(p);
-
     // Always start from a known surface. The game issues its own clears, but
     // anything it does not cover would otherwise expose stale video memory.
     nv2a_set_passthrough_transform();
     nv2a_clear_surface(0xF3);   // colour + depth + stencil
+    if (trace_frame) {
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F2 first frame clear submitted");
+    }
     g_noise_stencil_ref = 0;
 
     ++g_frame_count;
@@ -2191,6 +3025,12 @@ static void nv2a_end_frame(void)
 
 static void nv2a_finish_render(void)
 {
+    static bool traced_first_finish = false;
+    const bool trace_finish = !traced_first_finish;
+    if (trace_finish) {
+        traced_first_finish = true;
+        sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F3 first finish begin");
+    }
     if (g_current_framebuffer != FB_BACK_BUFFER) {
         nv2a_store_active_framebuffer();
         g_current_framebuffer = FB_BACK_BUFFER;
@@ -2198,11 +3038,91 @@ static void nv2a_finish_render(void)
     }
     // Hand the pushbuffer to the GPU and wait for it. Without this the
     // commands are never executed and we present a buffer nothing drew into.
+    if (trace_finish) sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F4 waiting pb_busy");
+    const ULONGLONG submit_complete = KeQueryPerformanceCounter();
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+    if (!nv2a_wait_for_idle_trace("finish_busy", 0, __LINE__, nullptr)) {
+        for (;;) {
+        }
+    }
+#else
     while (pb_busy()) {
         /* GPU still consuming */
     }
+#endif
+    const ULONGLONG gpu_complete = KeQueryPerformanceCounter();
+    if (trace_finish) sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F5 pb_busy clear; waiting pb_finished");
+#if defined(PD_XBOX_GPU_SYNC_TRACE)
+    {
+        const ULONGLONG start = KeQueryPerformanceCounter();
+        const ULONGLONG timeout = KeQueryPerformanceFrequency() * 2u;
+        while (pb_finished()) {
+            if (KeQueryPerformanceCounter() - start >= timeout) {
+                nv2a_dump_gpu_timeout("pb_finished", 0, __LINE__, nullptr);
+                for (;;) {
+                }
+            }
+        }
+    }
+#else
     while (pb_finished()) {
         /* waiting on swap prepare */
+    }
+#endif
+    const ULONGLONG queue_complete = KeQueryPerformanceCounter();
+    if (trace_finish) sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F6 GPU finish complete");
+
+    if (g_perf_frame_started && submit_complete >= g_perf_frame_started &&
+        gpu_complete >= submit_complete && queue_complete >= gpu_complete) {
+        const ULONGLONG submit_ticks = submit_complete - g_perf_frame_started;
+        const ULONGLONG gpu_ticks = gpu_complete - submit_complete;
+        const ULONGLONG queue_ticks = queue_complete - gpu_complete;
+        g_perf_submit_ticks += submit_ticks;
+        g_perf_gpu_drain_ticks += gpu_ticks;
+        g_perf_queue_ticks += queue_ticks;
+        if (submit_ticks > g_perf_submit_max) g_perf_submit_max = submit_ticks;
+        if (gpu_ticks > g_perf_gpu_drain_max) g_perf_gpu_drain_max = gpu_ticks;
+        if (queue_ticks > g_perf_queue_max) g_perf_queue_max = queue_ticks;
+
+        const DWORD vbl = pb_get_vbl_counter();
+        const DWORD vbl_delta = vbl - g_perf_previous_vbl;
+        g_perf_previous_vbl = vbl;
+        g_perf_vbl_total += vbl_delta;
+        if (vbl_delta > g_perf_vbl_max) g_perf_vbl_max = vbl_delta;
+
+        if (++g_perf_frame_samples >= 30u) {
+            const ULONGLONG frequency = KeQueryPerformanceFrequency();
+            const ULONGLONG divisor = frequency * g_perf_frame_samples;
+            const unsigned long submit_avg_us = divisor
+                ? (unsigned long)(g_perf_submit_ticks * 1000000u / divisor) : 0;
+            const unsigned long gpu_avg_us = divisor
+                ? (unsigned long)(g_perf_gpu_drain_ticks * 1000000u / divisor) : 0;
+            const unsigned long queue_avg_us = divisor
+                ? (unsigned long)(g_perf_queue_ticks * 1000000u / divisor) : 0;
+            const unsigned long submit_max_us = frequency
+                ? (unsigned long)(g_perf_submit_max * 1000000u / frequency) : 0;
+            const unsigned long gpu_max_us = frequency
+                ? (unsigned long)(g_perf_gpu_drain_max * 1000000u / frequency) : 0;
+            const unsigned long queue_max_us = frequency
+                ? (unsigned long)(g_perf_queue_max * 1000000u / frequency) : 0;
+            sysLogPrintf(LOG_NOTE,
+                         "NV2A PERF frames=%u submit_us=%lu/%lu gpu_drain_us=%lu/%lu queue_us=%lu/%lu vbl=%lu max_delta=%lu",
+                         g_perf_frame_samples,
+                         submit_avg_us, submit_max_us,
+                         gpu_avg_us, gpu_max_us,
+                         queue_avg_us, queue_max_us,
+                         (unsigned long)g_perf_vbl_total,
+                         (unsigned long)g_perf_vbl_max);
+            g_perf_submit_ticks = 0;
+            g_perf_gpu_drain_ticks = 0;
+            g_perf_queue_ticks = 0;
+            g_perf_submit_max = 0;
+            g_perf_gpu_drain_max = 0;
+            g_perf_queue_max = 0;
+            g_perf_vbl_total = 0;
+            g_perf_vbl_max = 0;
+            g_perf_frame_samples = 0;
+        }
     }
 
 #if defined(PD_XBOX_RENDER_QUALIFY_EFFECTS)
@@ -2288,7 +3208,11 @@ static void nv2a_finish_render(void)
     g_SPXBFramebufferPitch = g_last_presented_pitch;
     g_SPXBFramebufferWidth = pb_back_buffer_width();
     g_SPXBFramebufferHeight = pb_back_buffer_height();
-    pb_show_front_screen();
+    // Do not call pb_show_front_screen() here. That helper writes PCRTC_START
+    // immediately and points at pbkit's fixed initial front index, which can
+    // change scanout in the middle of a field. pb_finished() has already queued
+    // this completed frame for the VBlank ISR's tear-free rotation.
+    if (trace_finish) sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F7 VBlank swap queued");
 }
 
 // ── Framebuffer API ───────────────────────────────────────────────────────────
@@ -2417,8 +3341,11 @@ static void nv2a_update_framebuffer_parameters(int fb_id,
     texture.used = true;
     texture.width = width;
     texture.height = height;
+    texture.storage_width = width;
+    texture.storage_height = height;
     texture.pitch = pitch;
-    texture.fmt_word = 0x0001122au;
+    texture.fmt_word = NV2A_LINEAR_A8R8G8B8_FORMAT;
+    texture.swizzled = false;
     texture.linear_filter = true;
     texture.address_s = 3;
     texture.address_t = 3;
@@ -2459,6 +3386,33 @@ static uint32_t nv2a_average_rect(const uint8_t *base, uint32_t pitch,
         const uint32_t *row = (const uint32_t *)(base + y * pitch);
         for (uint32_t x = x0; x < x1; ++x) {
             const uint32_t px = row[x];
+            b += px & 255u;
+            g += (px >> 8) & 255u;
+            r += (px >> 16) & 255u;
+            a += px >> 24;
+            ++count;
+        }
+    }
+    if (!count) return 0;
+    return ((a / count) << 24) | ((r / count) << 16) |
+           ((g / count) << 8) | (b / count);
+}
+
+static uint32_t nv2a_average_rect(const NV2ATexture &texture,
+                                  const uint8_t *base, uint32_t pitch,
+                                  uint32_t x0, uint32_t y0,
+                                  uint32_t x1, uint32_t y1)
+{
+    if (!texture.swizzled) {
+        return nv2a_average_rect(base, pitch, x0, y0, x1, y1);
+    }
+
+    uint32_t a = 0, r = 0, g = 0, b = 0, count = 0;
+    for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+            const uint32_t index = nv2a_swizzled_pixel_index(
+                x, y, texture.storage_width, texture.storage_height);
+            const uint32_t px = ((const uint32_t *)base)[index];
             b += px & 255u;
             g += (px >> 8) & 255u;
             r += (px >> 16) & 255u;
@@ -2525,7 +3479,8 @@ static NV2ATexture *nv2a_prepare_blur_texture(int source_id)
             const uint32_t x0 = x * 4u;
             uint32_t x1 = x0 + 4u;
             if (x1 > source.width) x1 = source.width;
-            row[x] = nv2a_average_rect(src, source_pitch, x0, y0, x1, y1);
+            row[x] = nv2a_average_rect(source, src, source_pitch,
+                                       x0, y0, x1, y1);
         }
         memset(row + width, 0, pitch - width * 4u);
     }
@@ -2533,12 +3488,17 @@ static NV2ATexture *nv2a_prepare_blur_texture(int source_id)
     g_blur_texture.used = true;
     g_blur_texture.width = width;
     g_blur_texture.height = height;
+    g_blur_texture.storage_width = width;
+    g_blur_texture.storage_height = height;
     g_blur_texture.pitch = pitch;
-    g_blur_texture.fmt_word = 0x0001122au;
+    g_blur_texture.fmt_word = NV2A_LINEAR_A8R8G8B8_FORMAT;
+    g_blur_texture.swizzled = false;
     g_blur_texture.linear_filter = true;
-    g_blur_texture.address_s = source.address_s;
-    g_blur_texture.address_t = source.address_t;
+    g_blur_texture.address_s = 3;
+    g_blur_texture.address_t = 3;
     g_blur_texture.mipmaps = false;
+    g_blur_texture.external = source.external;
+    g_blur_texture.external_id = source.external_id;
     ++g_blur_texture.content_version;
     g_blur_source_id = source_id;
     g_blur_source_version = source.content_version;

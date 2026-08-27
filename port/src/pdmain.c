@@ -73,7 +73,9 @@
 #include "lib/str.h"
 #include "data.h"
 #include "types.h"
+#include "audio.h"
 #include "system.h"
+#include "video.h"
 
 #ifdef PLATFORM_XBOX
 #include "xbox/serial_xbox.h"
@@ -455,6 +457,7 @@ void mainLoop(void)
 		mempResetPool(MEMPOOL_7);
 		mempResetPool(MEMPOOL_STAGE);
 		filesStop(4);
+		videoPulseLoadingActivity();
 		PD_DBGMARK(211);
 
 		if (argFindByPrefix(1, "-ma")) {
@@ -462,10 +465,13 @@ void mainLoop(void)
 		}
 
 		memaReset(mempAlloc(g_MainMemaHeapSize, MEMPOOL_STAGE), g_MainMemaHeapSize);
+		videoPulseLoadingActivity();
 		PD_DBGMARK(212);
 		langReset(g_StageNum);
+		videoPulseLoadingActivity();
 		PD_DBGMARK(213);
 		playermgrReset();
+		videoPulseLoadingActivity();
 		PD_DBGMARK(214);
 
 		if (g_StageNum >= STAGE_TITLE) {
@@ -534,18 +540,24 @@ void mainLoop(void)
 
 		PD_DBGMARK(220);
 		gfxReset();
+		videoPulseLoadingActivity();
 		PD_DBGMARK(221);
 		joyReset();
 		dhudReset();
+		videoPulseLoadingActivity();
 		PD_DBGMARK(222);
 		zbufReset(g_StageNum);
+		videoPulseLoadingActivity();
 		PD_DBGMARK(223);
 		lvReset(g_StageNum);
+		videoPulseLoadingActivity();
 		PD_DBGMARK(224);
 		viReset(g_StageNum);
 		PD_DBGMARK(225);
 		frametimeCalculate();
 		profileReset();
+		videoEndLoadingActivity(g_StageNum);
+		audioEndStageTransition(g_StageNum);
 		PD_DBGMARK(226);
 
 		while (g_MainChangeToStageNum < 0) {
@@ -578,18 +590,23 @@ void mainLoop(void)
 			}
 		}
 
+		audioBeginStageTransition(g_StageNum, g_MainChangeToStageNum);
+		videoBeginLoadingActivity(g_StageNum, g_MainChangeToStageNum);
 		PD_DBGMARK(240);
 		lvStop();
+		videoPulseLoadingActivity();
 		PD_DBGMARK(241);
 		mempDisablePool(MEMPOOL_STAGE);
 		PD_DBGMARK(242);
 		mempDisablePool(MEMPOOL_7);
 		PD_DBGMARK(243);
 		filesStop(4);
+		videoPulseLoadingActivity();
 		PD_DBGMARK(244);
 		viBlack(true);
 		PD_DBGMARK(245);
 		pak0f116994();
+		videoPulseLoadingActivity();
 		PD_DBGMARK(246);
 
 		g_StageNum = g_MainChangeToStageNum;
