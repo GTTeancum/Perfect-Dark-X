@@ -32,14 +32,14 @@ You must own the source games and supply your own assets when building.
 Both images are native XEMU screenshots from a 1280x720 guest raster. They
 have not been resized or captured from the desktop.
 
-## Current status
+## Release status
 
-Version 1.0 of the Xbox port is prepared for hardware qualification. The
-campaign, combat simulator, menus, sound, dual-analog controls, and two- to
-four-player split-screen are running on the Original Xbox target. The installed
-game runs without keeping a 32 MiB N64 ROM resident: the desktop asset installer
-creates a loose runtime tree from the user's own ROM so the memory can instead
-serve the game and renderer.
+Version 1.0 is the first public release of the Original Xbox port. The campaign,
+combat simulator, menus, sound, dual-analog controls, and two- to four-player
+split-screen have been tested on Original Xbox hardware and in XEMU. The
+installed game runs without keeping a 32 MiB N64 ROM resident: the desktop
+asset installer creates a loose runtime tree from the user's own ROM so the
+memory can instead serve the game and renderer.
 
 Implemented Xbox-specific work includes:
 
@@ -96,6 +96,8 @@ explosion benchmarks.
 
 ## Installing the release
 
+[Download Perfect Dark X v1.0](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.0)
+
 ### Requirements
 
 - A modified Original Xbox capable of launching unsigned XBE files, or XEMU.
@@ -109,6 +111,7 @@ The release ZIP contains:
 - `default.xbe`;
 - `PerfectDarkXAssetInstaller.exe`;
 - `ext_tex.pak`;
+- `box art.png`;
 - `TitleImage.xbx`, `SaveImage.xbx`, and `TitleMeta.xbx` dashboard metadata;
 - a succinct `readme.txt`, the license, and checksums.
 
