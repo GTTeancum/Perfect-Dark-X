@@ -12,6 +12,10 @@ This repository contains source code and asset-processing tools. It does not
 contain a Perfect Dark ROM, XBLA game data, or generated replacement textures.
 You must own the source games and supply your own assets when building.
 
+<p align="center">
+  <img src="box%20art.png" alt="Perfect Dark X box art" width="100%">
+</p>
+
 ## Screenshots
 
 <table>
