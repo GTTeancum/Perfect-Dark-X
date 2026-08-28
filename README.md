@@ -140,9 +140,9 @@ Xbox-specific performance, video, audio, and input defaults are built into the
 XBE rather than exposed through an editable configuration file. FTP that entire
 generated folder to the Xbox.
 
-The XBE uses title ID `0x41500001` for the Xbox 360 XeFu compatibility test.
-Save data and dashboard metadata are stored under `E:\UDATA\41500001`; game
-progress is held in `eeprom.bin`.
+The XBE uses the homebrew title ID `0x50440001` (`PD-001`). Save data and
+dashboard metadata are stored under `E:\UDATA\50440001`; game progress is held
+in `eeprom.bin`.
 
 ### Original Xbox
 
@@ -257,8 +257,9 @@ python tools/pdx_asset_installer/installer.py
 ```
 
 The release ZIP is produced by an allowlisted packager. It accepts only the
-XBE, installer, texture pack, release `readme.txt`, license, and generated checksum file;
-`.iso`, ROM, and extracted ROM assets cannot enter the archive:
+XBE, installer, texture pack, box art, dashboard metadata, release `readme.txt`,
+license, and generated checksum file; `.iso`, ROM, and extracted ROM assets
+cannot enter the archive:
 
 ```powershell
 python tools/pdx_asset_installer/package_core.py `

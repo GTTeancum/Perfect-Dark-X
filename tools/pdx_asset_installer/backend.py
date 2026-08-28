@@ -32,7 +32,7 @@ ROM_DATA_OFFSET = 0x39850
 ROM_FILES_OFFSET = 0x28080
 TEXTURE_MAGIC = b"PDTXPAK1"
 TEXTURE_ENTRY = struct.Struct("<IIIHH")
-XBOX_TITLE_ID = 0x41500001
+XBOX_TITLE_ID = 0x50440001
 DASHBOARD_ASSET_NAMES = ("TitleImage.xbx", "SaveImage.xbx", "TitleMeta.xbx")
 
 # Generated from ROMSEG_LIST in port/src/romdata.c for ntsc-final. Entries
@@ -178,7 +178,7 @@ def validate_dashboard_assets(directory: Path) -> tuple[Path, ...]:
             raise ValueError(f"Invalid Xbox dashboard image: {asset}")
         if asset.name == "TitleMeta.xbx" and (
             not data.startswith(b"\xff\xfe")
-            or "TitleName=Perfect Dark X" not in data.decode("utf-16")
+            or "TitleName=Perfect Dark" not in data.decode("utf-16").splitlines()
         ):
             raise ValueError(f"Invalid Xbox title metadata: {asset}")
     return assets

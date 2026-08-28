@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 RELEASE_NAMES = {
+    "box art.png",
     "default.xbe",
     "PerfectDarkXAssetInstaller.exe",
     "ext_tex.pak",
@@ -22,7 +23,7 @@ RELEASE_NAMES = {
     "TitleMeta.xbx",
 }
 FORBIDDEN_SUFFIXES = {".iso", ".z64", ".n64", ".v64", ".bin", ".rom"}
-XBOX_TITLE_ID = 0x41500001
+XBOX_TITLE_ID = 0x50440001
 
 
 def sha256(path: Path) -> str:
@@ -37,10 +38,11 @@ def validate_inputs(
     xbe: Path,
     installer: Path,
     texture_pack: Path,
+    box_art: Path,
     readme: Path,
     license_path: Path,
 ) -> None:
-    for path in (xbe, installer, texture_pack, readme, license_path):
+    for path in (xbe, installer, texture_pack, box_art, readme, license_path):
         if not path.is_file():
             raise FileNotFoundError(path)
     with xbe.open("rb") as source:
@@ -63,6 +65,9 @@ def validate_inputs(
     with texture_pack.open("rb") as source:
         if source.read(8) != b"PDTXPAK1":
             raise ValueError("Texture pack is not a Perfect Dark X texture pack.")
+    with box_art.open("rb") as source:
+        if source.read(8) != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("Box art is not a PNG image.")
     for name, expected_size in (("TitleImage.xbx", 10_240), ("SaveImage.xbx", 4_096)):
         asset = xbe.parent / name
         if not asset.is_file() or asset.stat().st_size != expected_size:
@@ -78,6 +83,7 @@ def package_core(
     xbe: Path,
     installer: Path,
     texture_pack: Path,
+    box_art: Path,
     readme: Path,
     license_path: Path,
     output: Path,
@@ -85,10 +91,11 @@ def package_core(
     xbe = xbe.resolve()
     installer = installer.resolve()
     texture_pack = texture_pack.resolve()
+    box_art = box_art.resolve()
     readme = readme.resolve()
     license_path = license_path.resolve()
     output = output.resolve()
-    validate_inputs(xbe, installer, texture_pack, readme, license_path)
+    validate_inputs(xbe, installer, texture_pack, box_art, readme, license_path)
     if output.suffix.lower() != ".zip":
         raise ValueError("Core release output must use the .zip extension.")
     if output.exists():
@@ -99,6 +106,7 @@ def package_core(
         f"{sha256(xbe)}  default.xbe\n"
         f"{sha256(installer)}  PerfectDarkXAssetInstaller.exe\n"
         f"{sha256(texture_pack)}  ext_tex.pak\n"
+        f"{sha256(box_art)}  box art.png\n"
         f"{sha256(xbe.parent / 'TitleImage.xbx')}  TitleImage.xbx\n"
         f"{sha256(xbe.parent / 'SaveImage.xbx')}  SaveImage.xbx\n"
         f"{sha256(xbe.parent / 'TitleMeta.xbx')}  TitleMeta.xbx\n"
@@ -114,6 +122,7 @@ def package_core(
             archive.write(xbe, "default.xbe")
             archive.write(installer, "PerfectDarkXAssetInstaller.exe")
             archive.write(texture_pack, "ext_tex.pak")
+            archive.write(box_art, "box art.png")
             archive.write(xbe.parent / "TitleImage.xbx", "TitleImage.xbx")
             archive.write(xbe.parent / "SaveImage.xbx", "SaveImage.xbx")
             archive.write(xbe.parent / "TitleMeta.xbx", "TitleMeta.xbx")
@@ -141,6 +150,7 @@ def main() -> int:
     parser.add_argument("--xbe", required=True, type=Path)
     parser.add_argument("--installer", required=True, type=Path)
     parser.add_argument("--texture-pack", required=True, type=Path)
+    parser.add_argument("--box-art", default=Path("box art.png"), type=Path)
     parser.add_argument(
         "--readme",
         default=Path("tools/pdx_asset_installer/release_readme.txt"),
@@ -153,6 +163,7 @@ def main() -> int:
         args.xbe,
         args.installer,
         args.texture_pack,
+        args.box_art,
         args.readme,
         args.license_path,
         args.out,

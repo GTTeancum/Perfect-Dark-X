@@ -11,6 +11,11 @@
 #include "data.h"
 #include "types.h"
 
+#ifdef PLATFORM_XBOX
+#include <stdio.h>
+void serialPuts(const char *s);
+#endif
+
 #define FADETYPE_STOP  0
 #define FADETYPE_PAUSE 1
 
@@ -182,6 +187,7 @@ s32 musicGetChannelByTrackType(s32 tracktype)
 void musicQueueStartEvent(u32 tracktype, u32 tracknum, f32 arg2, u16 volume)
 {
 	if (!g_SndDisabled) {
+		u32 eventid = g_MusicNextEventId;
 		g_MusicEventQueue[g_MusicEventQueueLength].tracktype = tracktype;
 		g_MusicEventQueue[g_MusicEventQueueLength].tracknum = tracknum;
 		g_MusicEventQueue[g_MusicEventQueueLength].unk0c = arg2;
@@ -191,8 +197,54 @@ void musicQueueStartEvent(u32 tracktype, u32 tracknum, f32 arg2, u16 volume)
 		g_MusicEventQueue[g_MusicEventQueueLength].numattempts = 0;
 		g_MusicEventQueue[g_MusicEventQueueLength].failcount = 0;
 		g_MusicEventQueueLength++;
+#ifdef PLATFORM_XBOX
+		{
+			char msg[160];
+			snprintf(msg, sizeof(msg),
+					"music: queue play stage=%d id=%u type=%u track=%u depth=%d\n",
+					g_Vars.stagenum, (unsigned)eventid, (unsigned)tracktype,
+					(unsigned)tracknum, g_MusicEventQueueLength);
+			serialPuts(msg);
+		}
+#endif
 	}
 }
+
+#ifdef PLATFORM_XBOX
+void musicDebugDumpState(const char *phase)
+{
+	char msg[256];
+	s32 i;
+
+	snprintf(msg, sizeof(msg),
+			"music: state phase=%s stage=%d queue=%d menu=%d temp_primary=%d temp_ambient=%d\n",
+			phase ? phase : "?", g_Vars.stagenum, g_MusicEventQueueLength,
+			g_MenuTrack, g_TemporaryPrimaryTrack, g_TemporaryAmbientTrack);
+	serialPuts(msg);
+
+	for (i = 0; i < ARRAYCOUNT(g_SeqChannels); ++i) {
+		s32 playerstate = g_SeqInstances[i].seqp
+				? n_alCSPGetState(g_SeqInstances[i].seqp) : -1;
+		snprintf(msg, sizeof(msg),
+				"music: channel=%d type=%d track=%d inuse=%d fading=%d player_state=%d volume=%u\n",
+				i, g_SeqChannels[i].tracktype, g_SeqInstances[i].tracknum,
+				g_SeqChannels[i].inuse, g_SeqChannels[i].keepafterfade,
+				playerstate, (unsigned)g_SeqInstances[i].volume);
+		serialPuts(msg);
+	}
+
+	for (i = 0; i < g_MusicEventQueueLength && i < 8; ++i) {
+		snprintf(msg, sizeof(msg),
+				"music: pending=%d event=%u type=%d track=%d id=%u attempts=%u fail=%u\n",
+				i, (unsigned)g_MusicEventQueue[i].eventtype,
+				g_MusicEventQueue[i].tracktype, g_MusicEventQueue[i].tracknum,
+				(unsigned)(u16)g_MusicEventQueue[i].id,
+				(unsigned)g_MusicEventQueue[i].numattempts,
+				(unsigned)g_MusicEventQueue[i].failcount);
+		serialPuts(msg);
+	}
+}
+#endif
 
 void musicQueueStopEvent(s32 tracktype)
 {

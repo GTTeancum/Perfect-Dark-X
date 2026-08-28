@@ -49,6 +49,16 @@ def main():
 
     entries = [('default.xbe', args.xbe)]
 
+    # Match the hardware deployment: the game installs these loose resources
+    # into its title-ID UDATA directory on first boot. The title image is also
+    # embedded in the XBE for retail-style dashboard/CXBX-R discovery.
+    xbe_dir = os.path.dirname(os.path.abspath(args.xbe))
+    for asset_name in ('TitleImage.xbx', 'SaveImage.xbx', 'TitleMeta.xbx'):
+        asset_path = os.path.join(xbe_dir, asset_name)
+        if not os.path.isfile(asset_path):
+            sys.exit('dashboard asset missing beside XBE: %s' % asset_path)
+        entries.append((asset_name, asset_path))
+
     controlled_root_files = {'pd.ini', 'pdx_boot.ini'}
     tree = [entry for entry in xdvdfs_tree.collect_tree(args.loose)
             if entry[0].replace('\\', '/').lower() not in controlled_root_files]

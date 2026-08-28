@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image
 
 
-TITLE_NAME = "Perfect Dark X"
+TITLE_NAME = "Perfect Dark"
 
 
 def _write_bmp(icon: Image.Image, size: int, output: Path) -> None:

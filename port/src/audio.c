@@ -8,6 +8,9 @@
 #include "audio.h"
 #include "system.h"
 
+static const s16 *nextBuf;
+static u32 nextSize = 0;
+
 #ifdef PLATFORM_XBOX
 #include <xboxkrnl/xboxkrnl.h>
 #include <hal/audio.h>
@@ -22,13 +25,78 @@ static u8 *xboxBuffers[XBOX_AUDIO_BUFFER_COUNT];
 static u32 xboxBufferIndex;
 static u32 xboxRateRemainder;
 static volatile bool xboxStageTransition;
+static bool xboxTransitionResetOk;
 static u64 xboxTransitionStartedUs;
+static u32 xboxTransitionDroppedBuffers;
+static u32 xboxTransitionDroppedBytes;
+extern AC97_DEVICE ac97Device;
+
+static void xboxAudioPrimeSilence(void)
+{
+	for (u32 i = 0; i < 3; ++i) {
+		memset(xboxBuffers[i], 0, XBOX_AUDIO_BUFFER_BYTES);
+		XAudioProvideSamples(xboxBuffers[i], 4096, FALSE);
+	}
+	xboxBufferIndex = 3;
+}
+
+static bool xboxAudioStopAndReset(void)
+{
+	volatile u8 *ac97 = (volatile u8 *)0xfec00000;
+	const u64 timeoutTicks = KeQueryPerformanceFrequency() / 10u;
+	u64 started;
+
+	// Pause first, then reset both PCM-out bus-master channels. Unlike
+	// XAudioPause, this discards CIV/LVI state instead of retaining the current
+	// descriptor for a later XAudioPlay call.
+	XAudioPause();
+	ac97[0x11b] = 0x1e;
+	started = KeQueryPerformanceCounter();
+	while (ac97[0x11b] & 0x02) {
+		if (KeQueryPerformanceCounter() - started >= timeoutTicks) {
+			serialPuts("audio: analog DMA reset timed out\n");
+			return false;
+		}
+	}
+
+	ac97[0x17b] = 0x1e;
+	started = KeQueryPerformanceCounter();
+	while (ac97[0x17b] & 0x02) {
+		if (KeQueryPerformanceCounter() - started >= timeoutTicks) {
+			serialPuts("audio: digital DMA reset timed out\n");
+			return false;
+		}
+	}
+
+	ac97[0x116] = 0xff;
+	ac97[0x176] = 0xff;
+
+	for (u32 i = 0; i < XBOX_AUDIO_BUFFER_COUNT; ++i) {
+		ac97Device.pcmOutDescriptor[i].bufferStartAddress = 0;
+		ac97Device.pcmOutDescriptor[i].bufferLengthInSamples = 0;
+		ac97Device.pcmOutDescriptor[i].bufferControl = 0;
+		ac97Device.pcmSpdifDescriptor[i].bufferStartAddress = 0;
+		ac97Device.pcmSpdifDescriptor[i].bufferLengthInSamples = 0;
+		ac97Device.pcmSpdifDescriptor[i].bufferControl = 0;
+		memset(xboxBuffers[i], 0, XBOX_AUDIO_BUFFER_BYTES);
+	}
+
+	ac97Device.nextDescriptor = 0;
+	ac97Device.mmio = (volatile unsigned int *)ac97;
+	ac97Device.mmio[0x110 >> 2] = MmGetPhysicalAddress(
+			(void *)&ac97Device.pcmOutDescriptor[0]);
+	ac97Device.mmio[0x170 >> 2] = MmGetPhysicalAddress(
+			(void *)&ac97Device.pcmSpdifDescriptor[0]);
+	xboxBufferIndex = 0;
+	xboxRateRemainder = 0;
+	nextBuf = NULL;
+	nextSize = 0;
+	__asm__ __volatile__("sfence" ::: "memory");
+	return true;
+}
 #else
 static SDL_AudioDeviceID dev;
 #endif
-
-static const s16 *nextBuf;
-static u32 nextSize = 0;
 
 static s32 bufferSize = 512;
 static s32 queueLimit = 8192;
@@ -47,13 +115,13 @@ s32 audioInit(void)
 	}
 	XAudioInit(16, 2, NULL, NULL);
 	// Prime enough silence to cover boot-time jitter before the first mix.
-	for (u32 i = 0; i < 3; ++i) {
-		XAudioProvideSamples(xboxBuffers[i], 4096, FALSE);
-	}
-	xboxBufferIndex = 3;
+	xboxAudioPrimeSilence();
 	xboxRateRemainder = 0;
 	xboxStageTransition = false;
+	xboxTransitionResetOk = true;
 	xboxTransitionStartedUs = 0;
+	xboxTransitionDroppedBuffers = 0;
+	xboxTransitionDroppedBytes = 0;
 	XAudioPlay();
 	nextBuf = NULL;
 	sysLogPrintf(LOG_NOTE, "audio: Xbox AC97 direct stream 48000 Hz, stereo S16");
@@ -91,23 +159,27 @@ void audioBeginStageTransition(s32 fromStage, s32 toStage)
 {
 #ifdef PLATFORM_XBOX
 	volatile u8 *ac97 = (volatile u8 *)0xfec00000;
-	char msg[160];
+	char msg[240];
 
 	if (xboxStageTransition) return;
 	xboxStageTransition = true;
 	xboxTransitionStartedUs = sysGetMicroseconds();
-	nextBuf = NULL;
-	nextSize = 0;
-	XAudioPause();
+	xboxTransitionDroppedBuffers = 0;
+	xboxTransitionDroppedBytes = 0;
+	xboxTransitionResetOk = xboxAudioStopAndReset();
 
 	sysLogPrintf(LOG_NOTE,
-			"audio: transition begin from=%d to=%d mode=paused civ=%u lvi=%u sr=%04x",
-			fromStage, toStage, (unsigned)ac97[0x114],
-			(unsigned)ac97[0x115], *(volatile u16 *)(ac97 + 0x116));
+			"audio: transition begin from=%d to=%d mode=stopped reset=%u civ=%u lvi=%u sr=%04x cr=%02x next=%u",
+			fromStage, toStage, xboxTransitionResetOk ? 1u : 0u,
+			(unsigned)ac97[0x114], (unsigned)ac97[0x115],
+			*(volatile u16 *)(ac97 + 0x116), (unsigned)ac97[0x11b],
+			(unsigned)ac97Device.nextDescriptor);
 	snprintf(msg, sizeof(msg),
-			"audio: transition begin from=%d to=%d mode=paused civ=%u lvi=%u sr=%04x\n",
-			fromStage, toStage, (unsigned)ac97[0x114],
-			(unsigned)ac97[0x115], *(volatile u16 *)(ac97 + 0x116));
+			"audio: transition begin from=%d to=%d mode=stopped reset=%u civ=%u lvi=%u sr=%04x cr=%02x next=%u\n",
+			fromStage, toStage, xboxTransitionResetOk ? 1u : 0u,
+			(unsigned)ac97[0x114], (unsigned)ac97[0x115],
+			*(volatile u16 *)(ac97 + 0x116), (unsigned)ac97[0x11b],
+			(unsigned)ac97Device.nextDescriptor);
 	serialPuts(msg);
 #else
 	(void)fromStage;
@@ -120,22 +192,35 @@ void audioEndStageTransition(s32 stage)
 #ifdef PLATFORM_XBOX
 	volatile u8 *ac97 = (volatile u8 *)0xfec00000;
 	u64 elapsedUs;
-	char msg[176];
+	char msg[240];
 
 	if (!xboxStageTransition) return;
-	xboxStageTransition = false;
 	elapsedUs = sysGetMicroseconds() - xboxTransitionStartedUs;
+	// The audio thread continues to run while the main thread loads a stage.
+	// Keep its output blocked through this second reset: otherwise descriptors
+	// mixed during the spinner survive the first reset and all play at restart.
+	xboxTransitionResetOk = xboxAudioStopAndReset() && xboxTransitionResetOk;
+	// Start a brand-new descriptor ring containing silence only. Real stage
+	// audio cannot enter the ring until xboxStageTransition is cleared below.
+	xboxAudioPrimeSilence();
 	XAudioPlay();
+	xboxStageTransition = false;
 	sysLogPrintf(LOG_NOTE,
-			"audio: transition end stage=%d ms=%llu mode=playing civ=%u lvi=%u sr=%04x",
+			"audio: transition end stage=%d ms=%llu mode=restarted reset=%u dropped=%u/%u civ=%u lvi=%u sr=%04x cr=%02x next=%u",
 			stage, (unsigned long long)(elapsedUs / 1000u),
-			(unsigned)ac97[0x114], (unsigned)ac97[0x115],
-			*(volatile u16 *)(ac97 + 0x116));
+			xboxTransitionResetOk ? 1u : 0u,
+			(unsigned)xboxTransitionDroppedBuffers,
+			(unsigned)xboxTransitionDroppedBytes, (unsigned)ac97[0x114],
+			(unsigned)ac97[0x115], *(volatile u16 *)(ac97 + 0x116),
+			(unsigned)ac97[0x11b], (unsigned)ac97Device.nextDescriptor);
 	snprintf(msg, sizeof(msg),
-			"audio: transition end stage=%d ms=%llu mode=playing civ=%u lvi=%u sr=%04x\n",
+			"audio: transition end stage=%d ms=%llu mode=restarted reset=%u dropped=%u/%u civ=%u lvi=%u sr=%04x cr=%02x next=%u\n",
 			stage, (unsigned long long)(elapsedUs / 1000u),
-			(unsigned)ac97[0x114], (unsigned)ac97[0x115],
-			*(volatile u16 *)(ac97 + 0x116));
+			xboxTransitionResetOk ? 1u : 0u,
+			(unsigned)xboxTransitionDroppedBuffers,
+			(unsigned)xboxTransitionDroppedBytes, (unsigned)ac97[0x114],
+			(unsigned)ac97[0x115], *(volatile u16 *)(ac97 + 0x116),
+			(unsigned)ac97[0x11b], (unsigned)ac97Device.nextDescriptor);
 	serialPuts(msg);
 #else
 	(void)stage;
@@ -147,8 +232,10 @@ void audioStopForDashboard(void)
 #ifdef PLATFORM_XBOX
 	nextBuf = NULL;
 	nextSize = 0;
-	XAudioPause();
-	serialPuts("audio: stopped for dashboard IGR\n");
+	const bool reset = xboxAudioStopAndReset();
+	serialPuts(reset
+			? "audio: stopped and DMA reset for dashboard IGR\n"
+			: "audio: dashboard IGR DMA reset failed; stream paused\n");
 #endif
 }
 
@@ -196,6 +283,14 @@ void audioEndFrame(void)
 #endif
 	if (nextBuf && nextSize) {
 #ifdef PLATFORM_XBOX
+		if (xboxStageTransition) {
+			++xboxTransitionDroppedBuffers;
+			xboxTransitionDroppedBytes += nextSize;
+			nextBuf = NULL;
+			nextSize = 0;
+			return;
+		}
+
 		const u32 inFrames = nextSize / (2u * sizeof(*nextBuf));
 		u32 outFrames = 0;
 		if (inFrames) {

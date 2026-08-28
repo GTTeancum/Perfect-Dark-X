@@ -139,7 +139,7 @@ static inline void nv2a_copy_pixels(uint32_t *dst, const uint32_t *src,
 // Keeping it canonical avoids submitting partially initialized cached state.
 static const uint32_t NV2A_LINEAR_A8R8G8B8_FORMAT = 0x0001122au;
 static const uint32_t NV2A_TEXTURE_PHYSICAL_MASK = 0x03ffffffu;
-static const char NV2A_RUNTIME_BUILD_ID[] = "OG720-LOADSPIN-IGR-24";
+static const char NV2A_RUNTIME_BUILD_ID[] = "OG720-PDID-AUDIO-28";
 
 struct NV2ATexture {
     bool        used;

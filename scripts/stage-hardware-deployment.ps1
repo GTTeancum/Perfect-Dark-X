@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $sourceXbe = [IO.Path]::GetFullPath((Join-Path $repoRoot $Xbe))
 $sourceTexturePack = [IO.Path]::GetFullPath((Join-Path $repoRoot $TexturePack))
+$sourceBuildDir = Split-Path -Parent $sourceXbe
 $deployDir = Join-Path $repoRoot "build-xbox/release/Perfect Dark X"
 $targetXbe = Join-Path $deployDir "default.xbe"
 $targetTexturePack = Join-Path $deployDir "ext_tex.pak"
@@ -23,6 +24,14 @@ if (-not (Test-Path -LiteralPath $sourceTexturePack -PathType Leaf)) {
     throw "Texture pack not found: $sourceTexturePack"
 }
 
+$dashboardAssets = @("TitleImage.xbx", "SaveImage.xbx", "TitleMeta.xbx")
+foreach ($asset in $dashboardAssets) {
+    $sourceAsset = Join-Path $sourceBuildDir $asset
+    if (-not (Test-Path -LiteralPath $sourceAsset -PathType Leaf)) {
+        throw "Dashboard asset not found: $sourceAsset"
+    }
+}
+
 foreach ($required in @("files", "segs", "filenames.lst", "pdx-install.json")) {
     if (-not (Test-Path -LiteralPath (Join-Path $deployDir $required))) {
         throw "Canonical deployment is incomplete: missing $required"
@@ -31,6 +40,10 @@ foreach ($required in @("files", "segs", "filenames.lst", "pdx-install.json")) {
 
 Copy-Item -LiteralPath $sourceXbe -Destination $targetXbe -Force
 Copy-Item -LiteralPath $sourceTexturePack -Destination $targetTexturePack -Force
+foreach ($asset in $dashboardAssets) {
+    Copy-Item -LiteralPath (Join-Path $sourceBuildDir $asset) `
+        -Destination (Join-Path $deployDir $asset) -Force
+}
 
 $xbeInfo = Get-Item -LiteralPath $targetXbe
 $hash = (Get-FileHash -LiteralPath $targetXbe -Algorithm SHA256).Hash

@@ -43,8 +43,8 @@ option(PD_XBOX_QUALIFICATION_CONFIG
   "Allow the Xbox build to load qualification-only pdx_boot.ini overrides" OFF)
 option(PD_XBOX_IGR_TEST
   "Automatically exercise the Xbox dashboard-reset path after boot" OFF)
-set(PD_XBOX_TITLE_ID "0x41500001" CACHE STRING
-  "Original Xbox title ID used for the UDATA namespace and XeFu profile")
+set(PD_XBOX_TITLE_ID "0x50440001" CACHE STRING
+  "Original Xbox title ID used for the UDATA namespace")
 set(PD_XBOX_RENDER_TRACE_FRAME "0" CACHE STRING
     "Emit one frame of aggregate NV2A draw-state diagnostics to COM1")
 
@@ -480,12 +480,18 @@ if(XBOX)
     add_custom_command(TARGET pd POST_BUILD
       COMMAND ${CXBE_EXECUTABLE}
         -OUT:${CMAKE_BINARY_DIR}/default.xbe
-        -TITLE:"Perfect Dark X"
+        -TITLE:"Perfect Dark"
         $<TARGET_FILE:pd>
       COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_SOURCE_DIR}/scripts/patch-xbe-metadata.py
         --xbe ${CMAKE_BINARY_DIR}/default.xbe
         --title-id ${PD_XBOX_TITLE_ID}
+      COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/scripts/insert-xbe-dashboard-assets.py
+        --xbe ${CMAKE_BINARY_DIR}/default.xbe
+        --title-info ${CMAKE_SOURCE_DIR}/port/xbox_assets/TitleInfo.txt
+        --title-image ${CMAKE_SOURCE_DIR}/port/xbox_assets/TitleImage.xbx
+        --save-image ${CMAKE_SOURCE_DIR}/port/xbox_assets/SaveImage.xbx
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/port/xbox_assets/TitleImage.xbx
         ${CMAKE_BINARY_DIR}/TitleImage.xbx

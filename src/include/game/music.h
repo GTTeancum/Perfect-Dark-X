@@ -41,5 +41,8 @@ void musicEndTemporaryAmbient(void);
 void musicSetXReason(s32 reason, u32 minsecs, u32 maxsecs);
 void musicUnsetXReason(s32 reason);
 void musicTickAmbient(void);
+#ifdef PLATFORM_XBOX
+void musicDebugDumpState(const char *phase);
+#endif
 
 #endif

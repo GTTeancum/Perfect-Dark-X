@@ -556,8 +556,14 @@ void mainLoop(void)
 		PD_DBGMARK(225);
 		frametimeCalculate();
 		profileReset();
+		#ifdef PLATFORM_XBOX
+		musicDebugDumpState("load-complete-before-audio");
+		#endif
 		videoEndLoadingActivity(g_StageNum);
 		audioEndStageTransition(g_StageNum);
+		#ifdef PLATFORM_XBOX
+		musicDebugDumpState("audio-restarted");
+		#endif
 		PD_DBGMARK(226);
 
 		while (g_MainChangeToStageNum < 0) {
@@ -590,10 +596,16 @@ void mainLoop(void)
 			}
 		}
 
+		#ifdef PLATFORM_XBOX
+		musicDebugDumpState("transition-request");
+		#endif
 		audioBeginStageTransition(g_StageNum, g_MainChangeToStageNum);
 		videoBeginLoadingActivity(g_StageNum, g_MainChangeToStageNum);
 		PD_DBGMARK(240);
 		lvStop();
+		#ifdef PLATFORM_XBOX
+		musicDebugDumpState("stage-stopped");
+		#endif
 		videoPulseLoadingActivity();
 		PD_DBGMARK(241);
 		mempDisablePool(MEMPOOL_STAGE);
