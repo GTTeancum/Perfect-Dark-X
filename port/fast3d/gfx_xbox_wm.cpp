@@ -117,14 +117,16 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
         g_progressive = true;
     }
 
-    bool mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, g_refresh) != FALSE;
+    // Let the HAL honor the dashboard's PAL-50/PAL-60 preference. Forcing
+    // 60 Hz here can leave a PAL SDTV without a usable signal.
+    bool mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, REFRESH_DEFAULT) != FALSE;
     if (!mode_ok && (g_output_width != 640 || g_output_height != 480)) {
         serialPuts("PD-X: 720p mode unavailable; falling back to 480-line output\n");
         g_output_width = 640;
         g_output_height = 480;
         g_widescreen = dashboard_wide;
         g_progressive = g_can_480p;
-        mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, g_refresh) != FALSE;
+        mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, REFRESH_DEFAULT) != FALSE;
     }
     if (!mode_ok) {
         sysFatalError("No compatible 640x480 Xbox video mode.");
@@ -138,7 +140,7 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
             g_output_height = 480;
             g_widescreen = dashboard_wide;
             g_progressive = g_can_480p;
-            mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, g_refresh) != FALSE;
+            mode_ok = XVideoSetMode(g_output_width, g_output_height, 32, REFRESH_DEFAULT) != FALSE;
             active_mode = XVideoGetMode();
         }
         if (!mode_ok || active_mode.width != g_output_width
@@ -176,15 +178,13 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     const bool initializing_720p = gfx_xbox_wm_is_720p();
     pb_extra_buffers(initializing_720p ? 0 : 1);
 
-    // pbkit's 720p initialization stream exceeds its 512 KiB default
-    // pushbuffer before the first frame. XEMU accepts the out-of-range reset
-    // jump, but the original NV2A consumes past it and leaves DMA GET ahead of
-    // the rewound PUT forever. One MiB keeps initialization and its jump within
-    // the allocated DMA ring; individual frames are still reset normally.
-    if (initializing_720p) {
-        pb_size(1024u * 1024u);
-        sysLogPrintf(LOG_NOTE, "Xbox 720p pushbuffer: 1024 KiB");
-    }
+    // Startup commands can exceed pbkit's default 512 KiB pushbuffer before
+    // the first frame reset at SD resolutions too (GitHub issues #1/#2).
+    // An out-of-range reset jump can leave hardware DMA GET ahead of PUT and
+    // hang in pb_reset, even when XEMU accepts the same stream. Keep the
+    // qualified 1 MiB ring for every mode, including a retry from 720p.
+    pb_size(1024u * 1024u);
+    sysLogPrintf(LOG_NOTE, "Xbox pushbuffer: 1024 KiB");
 
     // Initialise pbkit (NV2A push-buffer engine)
     int pb_err = pb_init();
@@ -212,10 +212,10 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
         g_output_height = 480;
         g_widescreen = dashboard_wide;
         g_progressive = g_can_480p;
-        if (!XVideoSetMode(g_output_width, g_output_height, 32, g_refresh)) {
+        if (!XVideoSetMode(g_output_width, g_output_height, 32, REFRESH_DEFAULT)) {
             sysFatalError("720p fallback could not set 640x480 video mode.");
         }
-        pb_size(512u * 1024u);
+        // pb_kill/pb_init preserve the configured pushbuffer size.
         pb_extra_buffers(1);
         pb_err = pb_init();
         pb_geometry_ok = pb_err == 0
@@ -233,14 +233,15 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     }
 
     active_mode = XVideoGetMode();
+    g_refresh = active_mode.refresh;
     {
         char raster_line[144];
         snprintf(raster_line, sizeof(raster_line),
-                 "PD-X: verified raster video=%dx%d pbkit=%lux%lu aspect=%s\n",
+                 "PD-X: verified raster video=%dx%d pbkit=%lux%lu aspect=%s refresh=%dHz\n",
                  active_mode.width, active_mode.height,
                  (unsigned long)pb_back_buffer_width(),
                  (unsigned long)pb_back_buffer_height(),
-                 g_widescreen ? "16:9" : "4:3");
+                 g_widescreen ? "16:9" : "4:3", g_refresh);
         serialPuts(raster_line);
     }
 

@@ -18,6 +18,9 @@ USER_CHECKSUM_OFFSET = 0x60
 USER_DATA_OFFSET = 0x64
 USER_DATA_SIZE = 0x5C
 VIDEO_FLAGS_OFFSET = 0x94
+VIDEO_STANDARD_OFFSET = 0x58
+VIDEO_60HZ = 0x00400000
+VIDEO_50HZ = 0x00800000
 
 VIDEO_WIDESCREEN = 0x00010000
 VIDEO_MODE_720P = 0x00020000
@@ -84,10 +87,20 @@ def main() -> int:
         "--resolution", choices=("480i", "480p", "720p"), default="720p",
         help="highest dashboard video mode to enable (default: 720p)",
     )
+    parser.add_argument(
+        "--standard", choices=("source", "ntsc", "pal50", "pal60"), default="source",
+        help="video standard/refresh for the disposable profile (default: preserve source)",
+    )
     args = parser.parse_args()
 
     if args.resolution == "720p" and args.aspect != "16:9":
         parser.error("720p requires the dashboard's 16:9 aspect setting")
+    if args.standard.startswith("pal") and args.resolution != "480i":
+        parser.error("PAL qualification requires --resolution 480i")
+    if args.source_eeprom.resolve() == args.output_eeprom.resolve():
+        parser.error("output EEPROM must differ from source EEPROM")
+    if args.source_config.resolve() == args.output_config.resolve():
+        parser.error("output config must differ from source config")
 
     image = bytearray(args.source_eeprom.read_bytes())
     if len(image) != EEPROM_SIZE:
@@ -102,6 +115,14 @@ def main() -> int:
     if args.resolution == "720p":
         requested_flags |= VIDEO_MODE_720P
     new_flags = (old_flags & ~VIDEO_SETTING_MASK) | requested_flags
+    if args.standard != "source":
+        # Factory layout and CRC coverage match XEMU's hw/xbox/eeprom_generation.
+        # PAL-60 is a user preference on a PAL factory video standard.
+        standard = 0x00400100 if args.standard == "ntsc" else 0x00800300
+        struct.pack_into("<I", image, VIDEO_STANDARD_OFFSET, standard)
+        image[0x30:0x34] = eeprom_crc(bytes(image[0x34:0x60]))
+        new_flags &= ~(VIDEO_60HZ | VIDEO_50HZ)
+        new_flags |= VIDEO_50HZ if args.standard == "pal50" else VIDEO_60HZ
     struct.pack_into("<I", image, VIDEO_FLAGS_OFFSET, new_flags)
     checksum = eeprom_crc(
         bytes(image[USER_DATA_OFFSET:USER_DATA_OFFSET + USER_DATA_SIZE])
@@ -128,6 +149,7 @@ def main() -> int:
 
     print(f"source flags : 0x{old_flags:08x}")
     print(f"dashboard    : {args.aspect} {args.resolution}")
+    print(f"standard     : {args.standard}")
     print(f"output flags : 0x{new_flags:08x}")
     print(f"user CRC     : {checksum.hex()}")
     print(f"EEPROM       : {args.output_eeprom}")

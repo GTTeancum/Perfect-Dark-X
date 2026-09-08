@@ -34,6 +34,9 @@
 #ifndef PLATFORM_N64
 #include "video.h"
 #endif
+#ifdef PLATFORM_XBOX
+#include "pdx_version.h"
+#endif
 
 #ifdef PLATFORM_N64
 #define TITLE_ASPECT 1.33333333f
@@ -382,7 +385,11 @@ Gfx *titleRenderLegal(Gfx *gdl)
 				} else if (elem->textid == L_OPTIONS_083) {
 					elem->textptr = VERSION_ROMID;
 				} else if (elem->textid == L_OPTIONS_082) {
+#ifdef PLATFORM_XBOX
+					elem->textptr = PDX_RELEASE_LABEL;
+#else
 					elem->textptr = "Perfect Dark (" VERSION_BRANCH ")";
+#endif
 				}
 #endif
 				break;
@@ -1975,6 +1982,28 @@ Gfx *titleRenderNintendoLogo(Gfx *gdl)
 	return gdl;
 }
 
+#ifdef PLATFORM_XBOX
+// Keep the release label inside the original 4:3 title safe area on SDTVs.
+static Gfx *titleRenderXboxVersion(Gfx *gdl)
+{
+	s32 width;
+	s32 height;
+	s32 x;
+	s32 y;
+	char label[] = PDX_RELEASE_LABEL;
+
+	gdl = text0f153628(gdl);
+	gSPSetExtraGeometryModeEXT(gdl++, G_ASPECT_CENTER_EXT);
+	textMeasure(&height, &width, label, g_CharsHandelGothicLg, g_FontHandelGothicLg, 0);
+	x = (viGetWidth() - width) / 2;
+	y = viGetHeight() - height - 32;
+	gdl = textRenderProjected(gdl, &x, &y, label, g_CharsHandelGothicLg,
+			g_FontHandelGothicLg, 0xbfbfbfff, viGetWidth(), viGetHeight(), 0, 0);
+	gSPClearExtraGeometryModeEXT(gdl++, G_ASPECT_MODE_EXT);
+	return text0f153780(gdl);
+}
+#endif
+
 void titleInitRareLogo(void)
 {
 	u8 *nextaddr = var8009cca0;
@@ -2791,6 +2820,9 @@ Gfx *titleRender(Gfx *gdl)
 			break;
 		case TITLEMODE_NINTENDOLOGO:
 			gdl = titleRenderNintendoLogo(gdl);
+#ifdef PLATFORM_XBOX
+			gdl = titleRenderXboxVersion(gdl);
+#endif
 			break;
 		case TITLEMODE_RAREPRESENTS1:
 		case TITLEMODE_RAREPRESENTS2:
