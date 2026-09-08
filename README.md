@@ -34,8 +34,10 @@ have not been resized or captured from the desktop.
 
 ## Release status
 
-Version 1.0 is the first public release of the Original Xbox port. The campaign,
-combat simulator, menus, sound, dual-analog controls, and two- to four-player
+Version 1.1 is the current release of the Original Xbox port. It adds a visible
+startup version number and restores 480i support for SDTVs.
+
+The campaign, combat simulator, menus, sound, dual-analog controls, and two- to four-player
 split-screen have been tested on Original Xbox hardware and in XEMU. The
 installed game runs without keeping a 32 MiB N64 ROM resident: the desktop
 asset installer creates a loose runtime tree from the user's own ROM so the
@@ -61,9 +63,15 @@ no in-game resolution or aspect-ratio override.
 
 | Dashboard mode | Render raster | Presentation | Frame cap |
 | --- | ---: | --- | ---: |
-| 480i | 640x480 | Dashboard 4:3 or anamorphic 16:9 | 60 FPS |
+| 480i | 640x480 | Dashboard 4:3 or anamorphic 16:9 | 50/60 FPS |
 | 480p | 640x480 | Dashboard 4:3 or anamorphic 16:9 | 60 FPS |
 | 720p | 1280x720 | 16:9 only | 30 FPS |
+
+Interlaced output follows the dashboard's PAL-50/PAL-60 preference; NTSC uses
+60 Hz. All modes use a 1 MiB GPU push buffer, including fallback from 720p,
+to avoid the SD startup hang reported in issues
+[#1](https://github.com/GTTeancum/Perfect-Dark-X/issues/1) and
+[#2](https://github.com/GTTeancum/Perfect-Dark-X/issues/2).
 
 The 720p path verifies both the active Xbox video raster and pbkit back buffer
 before continuing. If the mode or its recoverable surface allocation fails,
@@ -96,7 +104,15 @@ explosion benchmarks.
 
 ## Installing the release
 
-[Download Perfect Dark X v1.0](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.0)
+[Download Perfect Dark X v1.1](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1)
+
+Changes in v1.1:
+
+- Version number visible on the startup splash.
+- 480i support restored.
+
+To update an existing v1.0 installation, replace its `default.xbe` with the
+one from the v1.1 ZIP.
 
 ### Requirements
 
@@ -200,6 +216,10 @@ viewport is darkened while its reconnect notice remains at full brightness;
 gameplay resumes automatically after every required controller returns.
 
 ## Building the Xbox port
+
+The public version shown on the startup splash is defined by `PDX_VERSION`
+in `port/include/pdx_version.h`. Update that value for each Xbox release;
+the product-information screen and Nintendo-logo caption share it.
 
 ### Prerequisites
 
