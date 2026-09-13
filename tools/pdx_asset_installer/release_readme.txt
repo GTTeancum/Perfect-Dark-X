@@ -1,3 +1,37 @@
+PERFECT DARK X v1.1.1 - DIAGNOSTIC RELEASE
+
+This build collects evidence for issue #3: the moving horizontal colored band,
+confirmed in 480i. It is not a confirmed fix. PAL specificity is unconfirmed.
+
+UPGRADING FROM v1.1
+
+Back up your original default.xbe, then replace only that file with the one
+from this ZIP. Keep your existing assets and saves. Restore the old executable
+when you have finished testing if desired.
+
+PLEASE UPLOAD LOGS
+
+Use a writable hard-drive installation. Play normally, particularly scenes
+where you previously saw the band. Note the approximate time since launch
+when it appears and take a photo or video showing the whole screen.
+
+Return to your dashboard and copy pd.log, pd.startup.log, and pd.previous.log
+(if present) from the game folder BEFORE launching the game again. A new
+launch overwrites logs. Zip them and attach them to a comment at:
+https://github.com/GTTeancum/Perfect-Dark-X/issues/3
+
+Include Xbox revision, RAM, BIOS/dashboard versions, video region and mode,
+cable/adapter, display, mission/location, session duration, and approximate
+time of the occurrence. Photos/video are especially useful. Clean runs are
+useful too: state the mode and duration. After a freeze, collect logs from the
+dashboard before relaunching; the last buffered records may be missing.
+
+Logs retain approximately 16 MiB of recent history plus startup output.
+If writing in the game folder fails, logging falls back to the title's T:
+location. Prefer a writable hard-drive install for straightforward collection.
+Logging can affect timing. This build preserves original presentation behavior;
+it does not enable the experimental presentation fixes or automated input.
+
 PERFECT DARK X - INSTALLATION
 
 1. Extract this ZIP to a folder on a Windows PC.

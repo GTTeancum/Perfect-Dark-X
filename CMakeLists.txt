@@ -37,6 +37,9 @@ option(FORCE_CROSSCOMPILE "Force cross compiling" NO)
 option(PD_XBOX_TRACE_MARKS "Emit high-frequency Xbox crash breadcrumbs to COM1" OFF)
 option(PD_XBOX_GPU_SYNC_TRACE
   "Synchronize and log every first-frame NV2A pushbuffer block" OFF)
+option(PD_XBOX_ISSUE3_DIAGNOSTIC "Issue 3 hardware diagnostics with original presentation" OFF)
+option(PD_XBOX_PRESENT_TRACE
+  "Log Xbox render-target overlap with the scanout buffer" OFF)
 option(PD_XBOX_RENDER_QUALIFY_EFFECTS
   "Stress stochastic-alpha and character-cloak rendering on Xbox" OFF)
 option(PD_XBOX_QUALIFICATION_CONFIG
@@ -174,6 +177,12 @@ if(XBOX)
   endif()
   if(PD_XBOX_GPU_SYNC_TRACE)
     add_definitions(-DPD_XBOX_GPU_SYNC_TRACE=1)
+  endif()
+  if(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    add_definitions(-DPD_XBOX_ISSUE3_DIAGNOSTIC=1 -DPD_XBOX_PRESENT_TRACE=1)
+  endif()
+  if(PD_XBOX_PRESENT_TRACE)
+    add_definitions(-DPD_XBOX_PRESENT_TRACE=1)
   endif()
   if(PD_XBOX_RENDER_QUALIFY_EFFECTS)
     add_definitions(-DPD_XBOX_RENDER_QUALIFY_EFFECTS=1)

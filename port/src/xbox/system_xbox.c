@@ -16,6 +16,7 @@ static inline void xboxMkdir(const char *path) { (void)path; }
 #include <PR/ultratypes.h>
 #include "platform.h"
 #include "system.h"
+#include "pdx_version.h"
 #include "serial_xbox.h"
 
 // ── Timing ───────────────────────────────────────────────────────────────────
@@ -38,6 +39,11 @@ static ULONGLONG qpc(void)
 static char logPath[512];
 static FILE *logFile;
 static u32 logLinesSinceFlush;
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+static unsigned logBytes;
+static FILE *startupLog;
+static unsigned startupBytes;
+#endif
 
 // ── Arg stubs (no command-line on Xbox) ─────────────────────────────────────
 
@@ -89,6 +95,12 @@ void sysInit(void)
         setvbuf(logFile, NULL, _IOFBF, 16 * 1024);
     }
 
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    char startupPath[512];
+    snprintf(startupPath, sizeof(startupPath), "%c:\\pd.startup.log", logPath[0]);
+    startupLog = fopen(startupPath, "wb");
+    sysLogPrintf(LOG_NOTE, "NV2A PERF DIAG1 release=" PDX_VERSION " original-presentation build=" __DATE__ " " __TIME__ " log=%s cap=8MiB+8MiB startup=128KiB; queue snapshots approximate", logPath);
+#endif
     sysLogPrintf(LOG_NOTE, "Xbox system initialised");
     sysLogPrintf(LOG_NOTE, "perf counter frequency: %llu Hz", perfFreq);
 }
@@ -132,10 +144,33 @@ void sysLogPrintf(s32 level, const char *fmt, ...)
         || strstr(msg, "PHASE") != NULL;
 
     if (logFile) {
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+        if (logBytes >= 8u * 1024u * 1024u) {
+            char rolled[512];
+            snprintf(rolled, sizeof(rolled), "%c:\\pd.previous.log", logPath[0]);
+            fclose(logFile);
+            remove(rolled);
+            rename(logPath, rolled);
+            logFile = fopen(logPath, "wb");
+            logBytes = 0;
+            if (logFile) setvbuf(logFile, NULL, _IOFBF, 16 * 1024);
+        }
+        if (logFile) {
+            int written = fprintf(logFile, "[diag1 %llu ms] %s%s\n", sysGetMicroseconds()/1000, prefix[level], msg);
+            if (written > 0) logBytes += written;
+        }
+        if (startupLog) {
+            int written = fprintf(startupLog, "[diag1 %llu ms] %s%s\n", sysGetMicroseconds()/1000, prefix[level], msg);
+            if (written > 0) startupBytes += written;
+            if (urgent) fflush(startupLog);
+            if (startupBytes >= 128u * 1024u) { fclose(startupLog); startupLog = NULL; }
+        }
+#else
         fprintf(logFile, "%s%s\n", prefix[level], msg);
+#endif
         ++logLinesSinceFlush;
         if (urgent || logLinesSinceFlush >= 64) {
-            fflush(logFile);
+            if (logFile) fflush(logFile);
             logLinesSinceFlush = 0;
         }
     }

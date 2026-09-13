@@ -282,6 +282,8 @@ enum controllerharnessphase {
 };
 
 static s32 controllerHarness = 0;
+static s32 videoSoak = 0;
+static u64 videoSoakStartUs = 0;
 static u64 controllerHarnessStartUs = 0;
 static s32 controllerHarnessLastPhase = -1;
 static u32 controllerHarnessSignaturesSeen = 0;
@@ -1111,6 +1113,17 @@ s32 inputReadController(s32 idx, OSContPad *npad)
 	npad->rstick_y = 0;
 
 #ifdef PLATFORM_XBOX
+	if (videoSoak && idx == 0) {
+		// Qualification-only process-local input. No SDL/host events are sent.
+		if (!videoSoakStartUs) videoSoakStartUs = sysGetMicroseconds();
+		const u64 elapsed = sysGetMicroseconds() - videoSoakStartUs;
+		if (elapsed >= 30000000) {
+			// OSContPad is already in game/N64 order: the first stick turns.
+			npad->stick_x = 24;
+			if ((elapsed / 1000000) % 8 == 0) npad->button = Z_TRIG;
+		}
+		return 0;
+	}
 	if (controllerHarness) {
 		static const u16 signatureButtons[INPUT_MAX_CONTROLLERS] = {
 			A_BUTTON, B_BUTTON, Z_TRIG, R_TRIG
@@ -2062,6 +2075,7 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
 	configRegisterInt("Input.FakeGamepads", &fakeControllers, 0, 4);
 #ifdef PLATFORM_XBOX
 	configRegisterInt("Input.ControllerHarness", &controllerHarness, 0, 1);
+	configRegisterInt("Input.VideoSoak", &videoSoak, 0, 1);
 #endif
 	configRegisterInt("Input.FirstGamepadNum", &firstController, 0, 3);
 	configRegisterInt("Input.UseHIDAPI", &useHIDAPI, 0, 1);

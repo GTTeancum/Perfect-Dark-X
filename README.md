@@ -34,7 +34,9 @@ have not been resized or captured from the desktop.
 
 ## Release status
 
-Version 1.1 is the current release of the Original Xbox port. It adds a visible
+Version 1.1.1 is a diagnostic release investigating the moving horizontal band in [issue #3](https://github.com/GTTeancum/Perfect-Dark-X/issues/3). Please upload logs and matching photos/video as described in the release notes. A fix is not yet confirmed.
+
+Version 1.1 was the preceding release of the Original Xbox port. It adds a visible
 startup version number and restores 480i support for SDTVs.
 
 The campaign, combat simulator, menus, sound, dual-analog controls, and two- to four-player
@@ -104,7 +106,9 @@ explosion benchmarks.
 
 ## Installing the release
 
-[Download Perfect Dark X v1.1](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1)
+[Download Perfect Dark X v1.1.1](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.1)
+
+Version 1.1.1 adds diagnostic logging. Existing v1.1 installations need only the replacement `default.xbe`; collect logs before relaunching.
 
 Changes in v1.1:
 

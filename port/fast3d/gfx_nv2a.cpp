@@ -2840,6 +2840,50 @@ static DWORD *g_dbg_fb = 0;
 static DWORD  g_dbg_fb_pitch = 0;
 static DWORD *g_last_presented_fb = 0;
 static DWORD  g_last_presented_pitch = 0;
+static bool g_frame_pending = false;
+
+#if defined(PD_XBOX_PRESENT_TRACE)
+static unsigned g_present_start_overlap = 0;
+static unsigned g_present_end_overlap = 0;
+static unsigned g_present_samples = 0;
+static unsigned g_present_waits = 0;
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+static uint32_t g_diag_start_scan;
+static uint32_t g_diag_start_vbl;
+#endif
+extern "C" volatile unsigned g_SPXBPbkitDeferredSwaps;
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+extern "C" void pdx_issue3_queue_snapshot(unsigned *);
+#endif
+#endif
+
+static bool nv2a_target_is_scanout(const DWORD *target)
+{
+    // PCRTC_START holds the physical base selected by pbkit's VBlank ISR.
+    return (nv2a_mmio_read(0x00600800u) & 0x03ffffffu) ==
+        ((uint32_t)(uintptr_t)target & 0x03ffffffu);
+}
+
+static void nv2a_acquire_back_buffer(void)
+{
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    return; // Observe original ownership collisions; do not apply candidate guard.
+#endif
+    // pb_finished() checks queue space after rendering, then advances the
+    // render index through three surfaces. It does not reserve the next
+    // surface against scanout. A fast producer can therefore catch the
+    // displayed surface before the next VBlank. Wait before any clear/draw,
+    // while still allowing submission ahead when a free surface exists.
+    const DWORD *target = pb_back_buffer();
+    while (nv2a_target_is_scanout(target)) {
+#if defined(PD_XBOX_PRESENT_TRACE)
+        ++g_present_waits;
+#endif
+        // Yield briefly, then recheck actual ownership. The project-local
+        // pbkit core also ensures queued frames are selected before retirement.
+        sysSleep(10000); // 1 ms in 100-ns units
+    }
+}
 
 // Stable C-linkage telemetry consumed by scripts/xemu_smoke.py.  Keeping these
 // in the backend makes framebuffer capture available to every repo using the
@@ -2878,6 +2922,7 @@ static void nv2a_draw_loading_frame(bool force)
     pb_reset();
 
     DWORD *target = pb_back_buffer();
+    nv2a_acquire_back_buffer();
     const DWORD pitch = pb_back_buffer_pitch();
     const int width = (int)pb_back_buffer_width();
     const int height = (int)pb_back_buffer_height();
@@ -2972,12 +3017,11 @@ static void nv2a_start_frame(void)
         traced_first_frame = true;
         sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F1 first frame begin");
     }
-    // pb_finished() queues completed buffers for the VBlank ISR. Waiting for
-    // another VBlank here serializes CPU submission behind scanout and can add
-    // almost a full refresh interval before every 720p frame. pbkit explicitly
-    // permits drawing ahead; its three-buffer queue supplies back-pressure.
+    // Drain the previous frame's buffer-selection commands before checking
+    // ownership. Only wait for VBlank when the next target is still displayed.
     g_perf_frame_started = KeQueryPerformanceCounter();
     pb_reset();
+    nv2a_acquire_back_buffer();
     if (trace_frame) {
         sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F1b pushbuffer reset complete");
     }
@@ -2995,6 +3039,14 @@ static void nv2a_start_frame(void)
     g_framebuffers[0].height = g_target_height;
     g_dbg_fb       = pb_back_buffer();
     g_dbg_fb_pitch = pb_back_buffer_pitch();
+    g_frame_pending = true;
+#if defined(PD_XBOX_PRESENT_TRACE)
+    g_present_start_overlap += nv2a_target_is_scanout(g_dbg_fb);
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    g_diag_start_scan = nv2a_mmio_read(0x00600800u);
+    g_diag_start_vbl = pb_get_vbl_counter();
+#endif
+#endif
     // Until the first completed frame exists, expose the initial target so
     // boot diagnostics still have an address. Later frames keep telemetry on
     // the completed surface; publishing the active back buffer here lets the
@@ -3025,6 +3077,21 @@ static void nv2a_end_frame(void)
 
 static void nv2a_finish_render(void)
 {
+    // The scheduler can end a frame without submitting a display list (and
+    // videoClearScreen currently does so too). Do not queue an undrawn buffer
+    // or republish the previous frame's pointer as if it had just rendered.
+    if (!g_frame_pending) {
+#if defined(PD_XBOX_PRESENT_TRACE)
+        static unsigned skipped_empty = 0;
+        if (++skipped_empty <= 4u) {
+            sysLogPrintf(LOG_NOTE, "NV2A PERF PRESENT skipped_empty=%u", skipped_empty);
+        }
+#endif
+#if !defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+        return;
+#endif
+    }
+    g_frame_pending = false;
     static bool traced_first_finish = false;
     const bool trace_finish = !traced_first_finish;
     if (trace_finish) {
@@ -3046,11 +3113,66 @@ static void nv2a_finish_render(void)
         }
     }
 #else
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    ULONGLONG next_busy_report = KeQueryPerformanceCounter() + KeQueryPerformanceFrequency()*2;
+#endif
     while (pb_busy()) {
-        /* GPU still consuming */
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+        if (KeQueryPerformanceCounter() >= next_busy_report) {
+            nv2a_dump_gpu_timeout("diag1_busy_still_waiting", 0, __LINE__, nullptr);
+            next_busy_report = KeQueryPerformanceCounter() + KeQueryPerformanceFrequency()*2;
+        }
+#endif
     }
 #endif
     const ULONGLONG gpu_complete = KeQueryPerformanceCounter();
+#if defined(PD_XBOX_PRESENT_TRACE)
+    const bool end_overlap = nv2a_target_is_scanout(g_dbg_fb);
+    g_present_end_overlap += end_overlap;
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    // Buffered disk-only history; aggregate PERF lines flush it periodically.
+    sysLogPrintf(LOG_NOTE, "DIAG1 FRAME f=%u target=%08x scan=%08x:%08x vbl=%u:%lu overlap=%u",
+        g_frame_count,(unsigned)(uintptr_t)g_dbg_fb,g_diag_start_scan,nv2a_mmio_read(0x00600800u),
+        g_diag_start_vbl,(unsigned long)pb_get_vbl_counter(),end_overlap);
+#endif
+    if (end_overlap && g_present_end_overlap <= 2u) {
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A PERF PRESENT overlap frame=%u target=%08lx back=%08lx scanout=%08lx",
+                     g_frame_count, (unsigned long)(uintptr_t)g_dbg_fb,
+                     (unsigned long)(uintptr_t)pb_back_buffer(),
+                     (unsigned long)nv2a_mmio_read(0x00600800u));
+    }
+    if (++g_present_samples == 60u) {
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+        MM_STATISTICS mm = {};
+        mm.Length = sizeof(mm);
+        const NTSTATUS memory_status = MmQueryStatistics(&mm);
+        sysLogPrintf(LOG_NOTE, "NV2A PERF DIAG1 memory status=%08lx total_pages=%lu available_pages=%lu",
+            (unsigned long)memory_status,(unsigned long)mm.TotalPhysicalPages,(unsigned long)mm.AvailablePages);
+        unsigned q[13];
+        pdx_issue3_queue_snapshot(q);
+        sysLogPrintf(LOG_NOTE, "NV2A PERF DIAG1 frame=%u vbl=%u back=%u producer=%u consumer=%u ready=%u,%u,%u index=%u,%u,%u fb=%08x,%08x,%08x scan=%08x pitch=%lu raster=%lux%lu retired_without_scanout=%u",
+            g_frame_count,q[0],q[1],q[2],q[3],q[4],q[5],q[6],q[7],q[8],q[9],q[10],q[11],q[12],nv2a_mmio_read(0x00600800u),
+            (unsigned long)pb_back_buffer_pitch(),(unsigned long)pb_back_buffer_width(),(unsigned long)pb_back_buffer_height(),g_SPXBPbkitDeferredSwaps);
+        sysLogPrintf(LOG_NOTE, "NV2A PERF DIAG1 state vp=%d,%d,%d,%d sc=%d,%d,%d,%d depth=%d,%d range_milli=%d,%d target=%u draws=%u tris=%u binds=%u copy=%u/%u/%u/%u noise=%u",
+            g_rs.vp_x,g_rs.vp_y,g_rs.vp_w,g_rs.vp_h,g_rs.sc_x,g_rs.sc_y,g_rs.sc_w,g_rs.sc_h,
+            g_rs.depth_test,g_rs.depth_write,(int)(g_rs.znear*1000),(int)(g_rs.zfar*1000),(unsigned)g_current_framebuffer,
+            g_dbg_draws,g_dbg_tris,g_dbg_texture_binds,g_dbg_fb_copy_calls,g_dbg_fb_copy_alias,g_dbg_fb_copy_scaled,g_dbg_fb_copy_box,g_dbg_noise_stencil_draws);
+        sysLogPrintf(LOG_NOTE, "NV2A PERF DIAG1 gpu pmc=%08x fifo_intr=%08x fifo_status=%08x put=%08x get=%08x graph_intr=%08x nsource=%08x status=%08x trapped=%08x",
+            nv2a_mmio_read(0x100),nv2a_mmio_read(0x2100),nv2a_mmio_read(0x3214),nv2a_mmio_read(0x3240),nv2a_mmio_read(0x3244),
+            nv2a_mmio_read(0x400100),nv2a_mmio_read(0x400108),nv2a_mmio_read(0x400700),nv2a_mmio_read(0x400704));
+#endif
+
+        sysLogPrintf(LOG_NOTE,
+                     "NV2A PERF PRESENT frames=%u start_overlap=%u end_overlap=%u acquire_waits=%u deferred_swaps=%u",
+                     g_present_samples, g_present_start_overlap, g_present_end_overlap,
+                     g_present_waits, g_SPXBPbkitDeferredSwaps);
+        g_present_samples = 0;
+        g_present_start_overlap = 0;
+        g_present_end_overlap = 0;
+        g_present_waits = 0;
+    }
+#endif
     if (trace_finish) sysLogPrintf(LOG_NOTE, "NV2A HWTRACE F5 pb_busy clear; waiting pb_finished");
 #if defined(PD_XBOX_GPU_SYNC_TRACE)
     {
@@ -3065,8 +3187,16 @@ static void nv2a_finish_render(void)
         }
     }
 #else
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    ULONGLONG next_queue_report = KeQueryPerformanceCounter() + KeQueryPerformanceFrequency()*2;
+#endif
     while (pb_finished()) {
-        /* waiting on swap prepare */
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+        if (KeQueryPerformanceCounter() >= next_queue_report) {
+            nv2a_dump_gpu_timeout("diag1_queue_still_waiting", 0, __LINE__, nullptr);
+            next_queue_report = KeQueryPerformanceCounter() + KeQueryPerformanceFrequency()*2;
+        }
+#endif
     }
 #endif
     const ULONGLONG queue_complete = KeQueryPerformanceCounter();

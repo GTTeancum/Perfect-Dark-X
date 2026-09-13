@@ -161,6 +161,9 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
                  g_widescreen ? "16:9" : "4:3",
                  g_progressive ? "progressive" : "interlaced");
         serialPuts(line);
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+        sysLogPrintf(LOG_NOTE, "NV2A PERF DIAG1 %s", line);
+#endif
         sysLogPrintf(LOG_NOTE, "Xbox video: output=%dx%d aspect=%s scan=%s",
                      g_output_width, g_output_height,
                      g_widescreen ? "16:9" : "4:3",
@@ -243,6 +246,9 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
                  (unsigned long)pb_back_buffer_height(),
                  g_widescreen ? "16:9" : "4:3", g_refresh);
         serialPuts(raster_line);
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+        sysLogPrintf(LOG_NOTE, "NV2A PERF DIAG1 %s", raster_line);
+#endif
     }
 
     pb_show_front_screen();
@@ -468,8 +474,14 @@ static int xbox_wm_get_swap_interval(void)
 
 static bool xbox_wm_set_swap_interval(int interval)
 {
-    (void)interval;
-    return false; // always 1 on Xbox
+    // The return value means success, not whether the setting is mutable.
+    // Reporting failure for 1 makes videoSetVsync treat Xbox as unsynced and
+    // select the shared 240 FPS fallback despite our VBlank presentation.
+#if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
+    return false; // Preserve the issue-report baseline's pacing.
+#else
+    return interval == 1;
+#endif
 }
 
 // ── API struct ────────────────────────────────────────────────────────────────
