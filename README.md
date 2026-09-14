@@ -34,7 +34,12 @@ have not been resized or captured from the desktop.
 
 ## Release status
 
-Version 1.1.1 is a diagnostic release investigating the moving horizontal band in [issue #3](https://github.com/GTTeancum/Perfect-Dark-X/issues/3). Please upload logs and matching photos/video as described in the release notes. A fix is not yet confirmed.
+Version 1.1.2 is a full release with the source build's presentation
+safeguards enabled. It replaces the v1.1.1 diagnostic executable and disables
+the additional issue-specific tracing. This follows the hardware comparison
+reported in [issue #3](https://github.com/GTTeancum/Perfect-Dark-X/issues/3).
+If the moving band returns in v1.1.2, please open a new issue with your setup,
+mission/location, and the current `pd.log` collected before relaunching.
 
 Version 1.1 was the preceding release of the Original Xbox port. It adds a visible
 startup version number and restores 480i support for SDTVs.
@@ -106,17 +111,27 @@ explosion benchmarks.
 
 ## Installing the release
 
-[Download Perfect Dark X v1.1.1](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.1)
+[Download Perfect Dark X v1.1.2](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.2)
 
-Version 1.1.1 adds diagnostic logging. Existing v1.1 installations need only the replacement `default.xbe`; collect logs before relaunching.
+Every release includes the complete distribution: the game executable, asset
+installer, texture pack, dashboard assets, instructions, license, and checksums.
+An earlier release is not required. Releases are never distributed as delta
+patches or executable-only downloads. See [release packaging](docs/RELEASING.md).
+
+Existing v1.0, v1.1, and v1.1.1 assets and saves remain compatible.
+
+Changes in v1.1.2:
+
+- Enable the normal source build's render-target ownership, queue-retirement,
+  and empty-frame safeguards.
+- Use the normal VSync reporting and remove the extra issue #3 diagnostic
+  tracing. Standard `pd.log` output remains available.
+- Display version 1.1.2 on startup.
 
 Changes in v1.1:
 
 - Version number visible on the startup splash.
 - 480i support restored.
-
-To update an existing v1.0 installation, replace its `default.xbe` with the
-one from the v1.1 ZIP.
 
 ### Requirements
 

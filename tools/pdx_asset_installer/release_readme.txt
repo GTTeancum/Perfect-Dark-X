@@ -1,36 +1,26 @@
-PERFECT DARK X v1.1.1 - DIAGNOSTIC RELEASE
+PERFECT DARK X v1.1.2 - FULL RELEASE
 
-This build collects evidence for issue #3: the moving horizontal colored band,
-confirmed in 480i. It is not a confirmed fix. PAL specificity is unconfirmed.
+This normal release enables the source build's presentation safeguards and
+VSync reporting. The extra issue #3 diagnostic tracing is disabled; standard
+pd.log output remains available. Version 1.1.2 appears on startup.
 
-UPGRADING FROM v1.1
+COMPLETE DISTRIBUTION
 
-Back up your original default.xbe, then replace only that file with the one
-from this ZIP. Keep your existing assets and saves. Restore the old executable
-when you have finished testing if desired.
+This ZIP includes the game executable, asset installer, texture pack,
+dashboard artwork/metadata, instructions, license, and checksums. You do not
+need an older release. Supply your own supported ROM as described below.
+Existing v1.0, v1.1, and v1.1.1 assets and saves remain compatible.
 
-PLEASE UPLOAD LOGS
+REPORTING A PROBLEM
 
-Use a writable hard-drive installation. Play normally, particularly scenes
-where you previously saw the band. Note the approximate time since launch
-when it appears and take a photo or video showing the whole screen.
+If the moving band returns, open a new issue at:
+https://github.com/GTTeancum/Perfect-Dark-X/issues/new
 
-Return to your dashboard and copy pd.log, pd.startup.log, and pd.previous.log
-(if present) from the game folder BEFORE launching the game again. A new
-launch overwrites logs. Zip them and attach them to a comment at:
-https://github.com/GTTeancum/Perfect-Dark-X/issues/3
-
-Include Xbox revision, RAM, BIOS/dashboard versions, video region and mode,
-cable/adapter, display, mission/location, session duration, and approximate
-time of the occurrence. Photos/video are especially useful. Clean runs are
-useful too: state the mode and duration. After a freeze, collect logs from the
-dashboard before relaunching; the last buffered records may be missing.
-
-Logs retain approximately 16 MiB of recent history plus startup output.
-If writing in the game folder fails, logging falls back to the title's T:
-location. Prefer a writable hard-drive install for straightforward collection.
-Logging can affect timing. This build preserves original presentation behavior;
-it does not enable the experimental presentation fixes or automated input.
+Include version 1.1.2, Xbox revision and RAM, BIOS/dashboard, video mode and
+aspect ratio, cable/display, mission/location, and time since launch. Copy
+the current pd.log before launching the game again and attach it to the issue.
+Older pd.startup.log or pd.previous.log files left by v1.1.1 may belong to a
+previous diagnostic run; this release does not update those diagnostic files.
 
 PERFECT DARK X - INSTALLATION
 
