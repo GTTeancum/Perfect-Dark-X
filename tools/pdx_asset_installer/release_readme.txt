@@ -1,22 +1,33 @@
-PERFECT DARK X v1.1.2 - FULL RELEASE
+PERFECT DARK X v1.1.3 - FULL RELEASE
 
-This normal release enables the source build's presentation safeguards and
-VSync reporting. The extra issue #3 diagnostic tracing is disabled; standard
-pd.log output remains available. Version 1.1.2 appears on startup.
+This normal release fixes SD Spy Cam corruption, rapid-menu GPU crashes,
+and missing training statistics (issues #4, #5, and #6). EyeSpy speed/height
+and mission-end accuracy formatting are also repaired. Menu input speed is
+unchanged; no input throttle or extra GPU flush is added. Normal presentation
+safeguards remain enabled, qualification input/tracing is disabled, and
+standard pd.log output remains available. Version 1.1.3 appears on startup.
+
+KNOWN LIMITATION
+
+Some SD menu backgrounds remain black in hardware test fixtures even when
+the foreground model is visible. This background-compositing defect remains
+unresolved. Targeted XEMU and retail 64 MiB Xbox checks do not constitute
+complete visual, audio, controller, save-persistence, or campaign testing.
+See docs/open-issue-repairs.md in the source repository for the test report.
 
 COMPLETE DISTRIBUTION
 
 This ZIP includes the game executable, asset installer, texture pack,
 dashboard artwork/metadata, instructions, license, and checksums. You do not
 need an older release. Supply your own supported ROM as described below.
-Existing v1.0, v1.1, and v1.1.1 assets and saves remain compatible.
+Existing v1.0, v1.1, v1.1.1, and v1.1.2 assets and saves remain compatible.
 
 REPORTING A PROBLEM
 
-If the moving band returns, open a new issue at:
+If a problem occurs, open a new issue at:
 https://github.com/GTTeancum/Perfect-Dark-X/issues/new
 
-Include version 1.1.2, Xbox revision and RAM, BIOS/dashboard, video mode and
+Include version 1.1.3, Xbox revision and RAM, BIOS/dashboard, video mode and
 aspect ratio, cable/display, mission/location, and time since launch. Copy
 the current pd.log before launching the game again and attach it to the issue.
 Older pd.startup.log or pd.previous.log files left by v1.1.1 may belong to a

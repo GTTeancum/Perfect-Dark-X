@@ -34,15 +34,19 @@ have not been resized or captured from the desktop.
 
 ## Release status
 
-Version 1.1.2 is a full release with the source build's presentation
-safeguards enabled. It replaces the v1.1.1 diagnostic executable and disables
-the additional issue-specific tracing. This follows the hardware comparison
-reported in [issue #3](https://github.com/GTTeancum/Perfect-Dark-X/issues/3).
-If the moving band returns in v1.1.2, please open a new issue with your setup,
+Version 1.1.3 is a full release repairing SD Spy Cam corruption, rapid menu
+navigation crashes, and missing numeric training statistics in issues
+[#4](https://github.com/GTTeancum/Perfect-Dark-X/issues/4),
+[#5](https://github.com/GTTeancum/Perfect-Dark-X/issues/5), and
+[#6](https://github.com/GTTeancum/Perfect-Dark-X/issues/6). It retains the
+normal presentation safeguards and disables qualification input and tracing.
+The repairs were checked in XEMU and on a retail 64 MiB Xbox running CerBIOS
+in NTSC 480i. See the [test report](docs/open-issue-repairs.md) for evidence
+and limits. If a problem returns, please open an issue with your setup,
 mission/location, and the current `pd.log` collected before relaunching.
 
-Version 1.1 was the preceding release of the Original Xbox port. It adds a visible
-startup version number and restores 480i support for SDTVs.
+Version 1.1 introduced a visible startup version number and restored 480i
+support for SDTVs.
 
 The campaign, combat simulator, menus, sound, dual-analog controls, and two- to four-player
 split-screen have been tested on Original Xbox hardware and in XEMU. The
@@ -99,6 +103,9 @@ explosion benchmarks.
 
 ### Known limitations
 
+- Some SD menu backgrounds remain black in the hardware test fixtures even
+  when the foreground model is visible. The v1.1.3 crash repair does not
+  resolve that background-compositing defect.
 - Visual parity is still being refined, particularly framebuffer-dependent
   effects and some scripted presentation at 720p.
 - The 720p tier intentionally trades effects and texture residency for a native
@@ -111,14 +118,30 @@ explosion benchmarks.
 
 ## Installing the release
 
-[Download Perfect Dark X v1.1.2](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.2)
+[Download Perfect Dark X v1.1.3](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.3)
 
 Every release includes the complete distribution: the game executable, asset
 installer, texture pack, dashboard assets, instructions, license, and checksums.
 An earlier release is not required. Releases are never distributed as delta
 patches or executable-only downloads. See [release packaging](docs/RELEASING.md).
 
-Existing v1.0, v1.1, and v1.1.1 assets and saves remain compatible.
+Existing v1.0, v1.1, v1.1.1, and v1.1.2 assets and saves remain compatible.
+
+Changes in v1.1.3:
+
+- Correct SD Spy Cam framebuffer copies beginning at the top-left origin.
+- Clamp both ends of GPU clip rectangles and skip empty clipped triangles,
+  preventing invalid GPU commands during rapid menu navigation. Input speed
+  is unchanged; the repair adds no input throttle or GPU flush.
+- Restore firing-range time and accuracy, device/hologram training times,
+  EyeSpy speed/height, and mission-end accuracy with integer decimal formatting.
+- Display version 1.1.3 on startup.
+
+The physical fast-input tests completed 918 transitions in 40 seconds in
+each of three menu flows, including a phase reversing direction every poll
+at 60 polls/second. Eleven training-text checks and three mission-accuracy
+checks passed. These targeted checks do not establish complete visual,
+audio, controller, save-persistence, or campaign qualification.
 
 Changes in v1.1.2:
 

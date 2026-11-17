@@ -2,8 +2,9 @@
 
 Based on `origin/port` commit `86566c096` (v1.1.2). Repairs and fast-input
 qualification were pushed directly to `port` in `b2eda4647` and `e94dd542f`.
-No release or GitHub issue closure was performed. Game data and native
-captures remain private in the repository's ignored `.local` directory.
+The physical follow-up is in `2eca85d62`. These repairs are included in the
+full v1.1.3 release. Game data and native captures remain private in the
+repository's ignored `.local` directory.
 
 ## Findings and repairs
 
@@ -332,7 +333,7 @@ Local evidence directories under `.local/evidence` include
 Each capture path is recorded in `run.json`.
 The release was rebuilt after adding the guarded input probes; the subsequent
 `release-after-input-probes` run again shows the textured city intro. Its ISO
-hash is the current one in `artifact-hashes.json`. Both normal builds exclude
+hash is recorded in `artifact-hashes.json`. Both normal builds exclude
 `PDX_INPUT`, `PDX_ISSUE` and `pdx_boot.ini` qualification markers.
 The earlier `baseline-spy` overlay fixture was superseded by the actual
 Research device-launch runs. `baseline-research-spy` was rejected by the disk
@@ -340,11 +341,29 @@ lock and is excluded from validation.
 
 ## Delivery and limits
 
-The normal build is `build-xbox/default.xbe`, with a private local test image
-at `build-xbox/perfectdarkx.iso`. Qualification configuration and fixture
-strings are absent from the normal XBE. The ISO contains that exact XBE and
-owner-extracted game data; it must remain private. Artifact SHA-256 values
-are recorded in `.local/evidence/artifact-hashes.json`.
+The earlier normal build and private test image are recorded in
+`.local/evidence/artifact-hashes.json`. They precede the v1.1.3 version bump.
+
+The full v1.1.3 ZIP contains ten allowlisted distribution files and verified
+checksums, with SHA-256
+`d4c536f2d2c03e961a44e1fd2557f815896d936c35acb265319ec61bb5418ad8`.
+Its clean-built normal XBE has SHA-256
+`13335f0f7119b59d5426341d4a34123cbcf22d0f05a4fdda6bb970725b21eca5`.
+Qualification markers are absent, and the compiled version is 1.1.3.
+The published v1.1.2 installer and texture pack are reused byte-for-byte.
+The installer backend extracted 2,011 files and 26 segments from the owner's
+ROM, copied the packaged files and generated a private XISO containing the
+exact release XBE. The source ROM was not copied into the game folder.
+The installer GUI was not operated in this session.
+
+A 55-second XEMU run of this fresh installation completed without a detected
+fatal error. The native capture at 40 seconds shows the expected textured
+city buildings and letterboxing; the black seven-second capture is not
+accepted as visual evidence. This verifies the selected intro scene, not
+every frame or the entire intro. Local records are
+`.local/release-1.1.3/validation.json` and
+`.local/evidence/release-1-1-3-boot/run.json`. The installer-generated XISO
+contains owner-extracted data and remains private.
 
 This is targeted SD regression testing, not a complete campaign, combat,
 multiplayer, PAL, or 720p qualification. Audio buffers advance with nonzero
