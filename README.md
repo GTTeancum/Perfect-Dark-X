@@ -34,7 +34,10 @@ have not been resized or captured from the desktop.
 
 ## Release status
 
-Version 1.1.3 is a full release repairing SD Spy Cam corruption, rapid menu
+**Version 1.1.3 has been withdrawn pending repair and hardware verification
+of black SD menu backgrounds. Version 1.1.2 remains the latest public release.**
+
+The pending 1.1.3 build repairs SD Spy Cam corruption, rapid menu
 navigation crashes, and missing numeric training statistics in issues
 [#4](https://github.com/GTTeancum/Perfect-Dark-X/issues/4),
 [#5](https://github.com/GTTeancum/Perfect-Dark-X/issues/5), and
@@ -118,7 +121,7 @@ explosion benchmarks.
 
 ## Installing the release
 
-[Download Perfect Dark X v1.1.3](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.3)
+[Download Perfect Dark X v1.1.2](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.2)
 
 Every release includes the complete distribution: the game executable, asset
 installer, texture pack, dashboard assets, instructions, license, and checksums.
@@ -127,7 +130,7 @@ patches or executable-only downloads. See [release packaging](docs/RELEASING.md)
 
 Existing v1.0, v1.1, v1.1.1, and v1.1.2 assets and saves remain compatible.
 
-Changes in v1.1.3:
+Changes in the withdrawn v1.1.3 build (not currently available for download):
 
 - Correct SD Spy Cam framebuffer copies beginning at the top-left origin.
 - Clamp both ends of GPU clip rectangles and skip empty clipped triangles,

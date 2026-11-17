@@ -2,8 +2,9 @@
 
 Based on `origin/port` commit `86566c096` (v1.1.2). Repairs and fast-input
 qualification were pushed directly to `port` in `b2eda4647` and `e94dd542f`.
-The physical follow-up is in `2eca85d62`. These repairs are included in the
-full v1.1.3 release. Game data and native captures remain private in the
+The physical follow-up is in `2eca85d62`. The v1.1.3 release was withdrawn
+after publication: black SD menu backgrounds require repair and physical
+verification before republishing. Game data and native captures remain private in the
 repository's ignored `.local` directory.
 
 ## Findings and repairs
@@ -344,7 +345,7 @@ lock and is excluded from validation.
 The earlier normal build and private test image are recorded in
 `.local/evidence/artifact-hashes.json`. They precede the v1.1.3 version bump.
 
-The full v1.1.3 ZIP contains ten allowlisted distribution files and verified
+The withdrawn v1.1.3 ZIP contains ten allowlisted distribution files and verified
 checksums, with SHA-256
 `d4c536f2d2c03e961a44e1fd2557f815896d936c35acb265319ec61bb5418ad8`.
 Its clean-built normal XBE has SHA-256
