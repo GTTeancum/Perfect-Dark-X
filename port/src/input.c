@@ -20,6 +20,9 @@ void serialPuts(const char *s);
 #include "utils.h"
 #include "system.h"
 #include "fs.h"
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+#include "xbox/issue_probe_xbox.h"
+#endif
 
 #if !SDL_VERSION_ATLEAST(2, 0, 14)
 // this was added in 2.0.14
@@ -337,6 +340,9 @@ static s32 useRawInput = 0;
 
 static inline s32 inputEffectiveControllerMask(void)
 {
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+	if (pdxIssueProbeInputEnabled()) return 1;
+#endif
 #ifdef PLATFORM_XBOX
 	if (controllerHarness) {
 		return inputControllerHarnessPhase() == CONTROLLER_HARNESS_DISCONNECTED
@@ -1111,6 +1117,10 @@ s32 inputReadController(s32 idx, OSContPad *npad)
 	npad->stick_y = 0;
 	npad->rstick_x = 0;
 	npad->rstick_y = 0;
+
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+	if (pdxIssueProbeInputEnabled()) return pdxIssueProbeReadPad(idx, npad);
+#endif
 
 #ifdef PLATFORM_XBOX
 	if (videoSoak && idx == 0) {

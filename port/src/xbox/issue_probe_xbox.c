@@ -29,6 +29,13 @@ static s32 scenario;
 static unsigned ticks;
 static unsigned swipes;
 static bool spy_requested;
+static u64 input_started;
+static s32 input_phase = -1;
+static unsigned input_polls, input_edges, input_reversals, menu_swipes, opening_swipes;
+static unsigned phase_swipes, phase_edges, phase_reversals;
+static u64 previous_poll, maximum_poll_gap;
+static s32 previous_direction;
+static bool input_finished;
 
 static void probeLog(const char *fmt, ...)
 {
@@ -39,6 +46,73 @@ static void probeLog(const char *fmt, ...)
     va_end(args);
     serialPuts(line);
     serialPutc('\n');
+}
+
+s32 pdxIssueProbeInputEnabled(void)
+{
+    return scenario >= 5 && scenario <= 7;
+}
+
+/* Inject only into this Xbox process, before libultra's controller sample
+ * queue. Normal edge detection, menu repeat and dialog logic consume it. */
+s32 pdxIssueProbeReadPad(s32 idx, OSContPad *pad)
+{
+    if (idx != 0) return -1;
+    if (!input_started || input_finished) return 0;
+    u64 now = sysGetMicroseconds();
+    u32 elapsed = (u32)(now - input_started);
+    s32 phase = elapsed / 8000000;
+    if (phase >= 5) return 0;
+    if (phase != input_phase) {
+        if (input_phase >= 0) {
+            probeLog("PDX_INPUT phase-end phase=%d edges=%u reversals=%u swipes=%u",
+                     input_phase, input_edges - phase_edges,
+                     input_reversals - phase_reversals, menu_swipes - phase_swipes);
+        }
+        input_phase = phase;
+        phase_edges = input_edges;
+        phase_reversals = input_reversals;
+        phase_swipes = menu_swipes;
+        probeLog("PDX_INPUT phase=%d elapsed_ms=%u", phase, elapsed / 1000);
+    }
+    if (previous_poll && now - previous_poll > maximum_poll_gap)
+        maximum_poll_gap = now - previous_poll;
+    previous_poll = now;
+    ++input_polls;
+    u32 local = elapsed % 8000000;
+    s32 direction;
+    if (phase <= 1) {
+        /* 10 or 20 alternating taps/second, each 50% pressed, 50% neutral. */
+        u32 period = phase == 0 ? 100000 : 50000;
+        direction = local % period < period / 2 ? ((local / period) % 2 ? -1 : 1) : 0;
+    } else if (phase == 2) {
+        /* Full stick reversal every 50 ms, including normal analog repeat. */
+        direction = (local / 50000) % 2 ? -1 : 1;
+        pad->stick_x = direction * 80;
+    } else if (phase == 3) {
+        /* Fastest observable digital reversal: every controller poll. */
+        direction = input_polls % 2 ? -1 : 1;
+    } else {
+        /* Two-second holds exercise both slow and accelerated key repeat. */
+        direction = (local / 2000000) % 2 ? -1 : 1;
+    }
+    if (phase != 2 && direction)
+        pad->button = direction < 0 ? L_CBUTTONS : R_CBUTTONS;
+    if (direction && direction != previous_direction) ++input_edges;
+    if (direction && previous_direction && direction != previous_direction) ++input_reversals;
+    previous_direction = direction;
+    return 0;
+}
+
+void pdxIssueProbeMenuSwipe(s32 direction, s32 outgoingstate)
+{
+    if (!pdxIssueProbeInputEnabled() || !input_started || input_finished) return;
+    ++menu_swipes;
+    if (outgoingstate < MENUDIALOGSTATE_POPULATED) ++opening_swipes;
+    if (menu_swipes <= 8 || menu_swipes % 100 == 0)
+        probeLog("PDX_INPUT swipe=%u direction=%d outgoing_state=%d elapsed_ms=%u",
+                 menu_swipes, direction, outgoingstate,
+                 (unsigned)((sysGetMicroseconds() - input_started) / 1000));
 }
 
 static unsigned checkText(const char *label, const char *actual, const char *expected)
@@ -86,7 +160,7 @@ static void testTrainingText(void)
 
 PD_CONSTRUCTOR static void issueProbeConfig(void)
 {
-    configRegisterInt("Game.IssueProbe", &scenario, 0, 4);
+    configRegisterInt("Game.IssueProbe", &scenario, 0, 7);
 }
 
 void pdxIssueProbeTick(void)
@@ -95,7 +169,22 @@ void pdxIssueProbeTick(void)
     ++ticks;
     if (ticks == 120) {
         probeLog("PDX_ISSUE begin scenario=%d", scenario);
-        if (scenario == 4) {
+        if (pdxIssueProbeInputEnabled()) {
+            if (scenario == 5) {
+                menuPushRootDialog(&g_CiControlOptionsMenuDialog, MENUROOT_MAINMENU);
+            } else if (scenario == 6) {
+                g_DtSlot = 0;
+                dtGetData()->timetaken = PAL ? 525 : 630;
+                menuPushRootDialog(&g_DtCompletedMenuDialog, MENUROOT_TRAINING);
+            } else {
+                var80088bb4 = 0;
+                getHoloTrainingData()->timetaken = PAL ? 525 : 630;
+                menuPushRootDialog(&g_HtCompletedMenuDialog, MENUROOT_TRAINING);
+            }
+            struct menu *menu = &g_Menus[g_MpPlayerNum];
+            probeLog("PDX_INPUT setup scenario=%d siblings=%d", scenario,
+                     menu->layers[menu->depth - 1].numsiblings);
+        } else if (scenario == 4) {
             /* Submit the out-of-bounds clip from the hardware failure directly
              * to NV2A, then exercise the remaining edges and restore the view. */
             int width = pb_back_buffer_width(), height = pb_back_buffer_height();
@@ -135,8 +224,23 @@ void pdxIssueProbeTick(void)
                          time_text, accuracy_text);
         }
     }
+    if (pdxIssueProbeInputEnabled() && ticks == 180) {
+        input_started = sysGetMicroseconds();
+        probeLog("PDX_INPUT begin duration_ms=40000 phases=5 scenario=%d", scenario);
+    }
+    if (input_started && !input_finished && sysGetMicroseconds() - input_started >= 40000000) {
+        input_finished = true;
+        probeLog("PDX_INPUT phase-end phase=%d edges=%u reversals=%u swipes=%u",
+                 input_phase, input_edges - phase_edges,
+                 input_reversals - phase_reversals, menu_swipes - phase_swipes);
+        probeLog("PDX_INPUT complete scenario=%d elapsed_ms=%u polls=%u edges=%u reversals=%u swipes=%u opening_swipes=%u max_poll_gap_us=%u",
+                 scenario, (unsigned)((sysGetMicroseconds() - input_started) / 1000),
+                 input_polls, input_edges, input_reversals, menu_swipes, opening_swipes,
+                 (unsigned)maximum_poll_gap);
+    }
     if (scenario == 1 && ticks > 180 && ticks < 2400 && ticks % 3 == 0) {
-        /* Exercise the original swipe/transition path at 20 requests/second. */
+        /* Direct transition stress: one request per three main ticks.
+         * Wall-clock rate depends on performance; this bypasses pad input. */
         if (g_Menus[g_MpPlayerNum].curdialog && g_Menus[g_MpPlayerNum].depth > 0) {
             menuSwipe((ticks / 45) % 2 ? 1 : -1);
             ++swipes;

@@ -59,6 +59,87 @@ nor the direct boundary probe reproduces the physical GPU halt. The repair
 addresses the invalid command identified by the hardware report, but the
 original menu-crash reproduction still requires physical-Xbox confirmation.
 
+## Follow-up: fast simulated controller input
+
+The original 739-call test bypassed the controller input path. It called
+`menuSwipe()` every three main ticks, reversing direction every 45 ticks;
+20 calls/second was only the nominal rate at 60 main ticks/second. It was
+transition stress, not a reproduction of button presses.
+
+[The reporter](https://github.com/GTTeancum/Perfect-Dark-X/issues/5) describes
+rapid left/right movement in controller options and after the first tutorial,
+on a 1.6 Xbox launched from XBMC4Gamers in standard definition. The report
+does not specify cadence, stick versus D-pad, game build, region, aspect ratio,
+or which tutorial. The follow-up uses NTSC 480i 4:3, 64 MiB and stock textures. XEMU
+direct-boots the XBE; the 1.6 console and dashboard launch environment are
+not reproduced.
+
+Scenarios 5–7 supply mapped controller samples inside `inputReadController`,
+before the ordinary libultra sample queue, pressed-edge detection, menu
+repeat handling and dialog navigation. They send no host input and make no
+direct `menuSwipe` calls. The observer counts only actual menu swipes and
+records whether the outgoing dialog was still opening/populating. There is
+no added input throttle, GPU wait or buffer flush.
+
+Each scenario runs five consecutive eight-second phases:
+
+| Phase | Input pattern |
+| --- | --- |
+| 0 | Alternating digital taps at 10/second: 50 ms pressed, 50 ms neutral |
+| 1 | Alternating digital taps at 20/second: 25 ms pressed, 25 ms neutral |
+| 2 | Stick at +80/-80, reversing every 50 ms |
+| 3 | Digital left/right reversal every controller poll, observed at 60/second |
+| 4 | Alternating two-second digital holds, exercising normal repeat acceleration |
+
+Controller-options, first-device results and first-hologram results use the
+original dialogs and their sibling lists. The results dialogs use deterministic
+in-memory fixtures; these tests do not complete or save a tutorial. The US
+v1.1 firing-range completion dialog has no sibling page, so it is not used
+as a substitute for the two swipable tutorial-result dialogs.
+
+The original clip calculation is also exercised in comparator builds with
+the same input harness and other fixes retained. This isolates clipping;
+these comparator images are not unmodified upstream binaries.
+
+All three repaired scenarios complete 919 actual menu transitions in 40.00
+seconds, with 2,400 controller polls. The per-phase counts are 80, 160, 160,
+480 and 39. All 919 outgoing dialogs are still opening/populating when the
+next transition arrives. The final captures show readable Control Player 2,
+Device List and Holotraining pages after input returns to neutral. Mid-run
+captures show partially open/sliding dialogs; they are not evidence that
+every animation frame is visually correct. The pre-existing foreground
+weapon/model in the direct-CI fixture remains visible.
+
+| Repaired scenario | GPU drain mean / maximum | Presentation queue wait mean / maximum |
+| --- | ---: | ---: |
+| Controller options | 0.194 / 4.283 ms | 0.301 / 4.982 ms |
+| Device results/list | 0.161 / 5.829 ms | 0.283 / 4.724 ms |
+| Hologram results/list | 0.315 / 4.550 ms | 0.323 / 5.997 ms |
+
+These are the renderer's existing timing counters aggregated over 2,400
+frames per scenario, with 30-frame reporting windows. They show no sustained
+GPU drain/queue stall during these emulator tests, but cannot exclude a
+hardware-specific synchronization fault.
+
+Ordinary held/repeated pad input reaches the repaired out-of-range clip path
+in all three scenarios. For example, controller options generates
+`input=651,133,17,195` on the 640×480 target and emits `0x02800280`, keeping
+both horizontal endpoints at 640. This connects the bounds repair to actual
+menu input; the earlier direct boundary probe alone did not establish that.
+
+Both comparator runs also complete 919 transitions, but their logs show the
+old calculation emitting inverted bounds: `0x0280028b` for min=651/max=640.
+The hologram-results path also emits `0x02800285` for min=645/max=640,
+the same invalid interval used in the earlier hardware-report analysis.
+XEMU accepts those commands, so survival in the emulator alone cannot
+distinguish the broken and repaired builds. The changed command values are
+the differentiating evidence; physical Xbox confirmation remains necessary.
+
+Logs, native capture paths and ISO hashes are in `.local/evidence/` under
+`fixed-pad-controls`, `fixed-pad-training-6`, `fixed-pad-training-7`,
+`baseline-clip-pad-5` and `baseline-clip-pad-7`. The derived timing/count
+summary is `.local/evidence/fast-input-summary.json`.
+
 ## Repeating the probes
 
 Build with `-DPD_XBOX_QUALIFICATION_CONFIG=ON`. Pack a `pdx_boot.ini` using
@@ -70,6 +151,9 @@ Build with `-DPD_XBOX_QUALIFICATION_CONFIG=ON`. Pack a `pdx_boot.ini` using
 | Training text assertions and results fixture | 38 | 2 |
 | Actual Research EyeSpy activation | 51 | 3 |
 | Direct GPU clip-boundary exercise | 38 | 4 |
+| Controller options: fast simulated pad input | 38 | 5 |
+| First-device results/list: fast simulated pad input | 38 | 6 |
+| First-hologram results/list: fast simulated pad input | 38 | 7 |
 
 Run from the repository with Windows Python and the installed Pillow library:
 
@@ -78,6 +162,11 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 python scripts/pdx_issue_probe.py --iso build-xbox-fixed/spy.iso `
   --name research-spy-repeat --seconds 90 --capture-at 70 `
   --require 'PDX_ISSUE eyespy active=1 deployed=1 held=0 startup=50'
+
+# After packing scenario 5 using the corresponding Game keys:
+python scripts/pdx_issue_probe.py --iso build-xbox-fixed/input-5.iso `
+  --name pad-controls-repeat --seconds 75 --capture-at 30 65 `
+  --require 'PDX_INPUT complete scenario=5'
 ```
 
 The runner validates repository-local config/media paths, prevents concurrent
@@ -91,6 +180,10 @@ Local evidence directories under `.local/evidence` include
 `baseline-research-spy-isolated`, `fixed-research-spy`, `fixed-menu-stress`,
 `baseline-clip`, `fixed-clip`, `fixed-wide-spy-metrics`, and `release-boot`.
 Each capture path is recorded in `run.json`.
+The release was rebuilt after adding the guarded input probes; the subsequent
+`release-after-input-probes` run again shows the textured city intro. Its ISO
+hash is the current one in `artifact-hashes.json`. Both normal builds exclude
+`PDX_INPUT`, `PDX_ISSUE` and `pdx_boot.ini` qualification markers.
 The earlier `baseline-spy` overlay fixture was superseded by the actual
 Research device-launch runs. `baseline-research-spy` was rejected by the disk
 lock and is excluded from validation.

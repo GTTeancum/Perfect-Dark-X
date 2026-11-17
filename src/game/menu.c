@@ -1,4 +1,7 @@
 #include <ultra64.h>
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+#include "../../port/src/xbox/issue_probe_xbox.h"
+#endif
 #include "constants.h"
 #include "../lib/naudio/n_sndp.h"
 #include "game/camdraw.h"
@@ -4039,6 +4042,9 @@ void menuSwipe(s32 direction)
 	union handlerdata sp40;
 
 	if (layer->numsiblings >= 2) {
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+		pdxIssueProbeMenuSwipe(direction, g_Menus[g_MpPlayerNum].curdialog->state);
+#endif
 		g_Menus[g_MpPlayerNum].curdialog->swipedir = -direction;
 
 		layer->cursibling += (s8)direction;
