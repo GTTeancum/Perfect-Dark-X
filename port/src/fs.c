@@ -193,9 +193,16 @@ s32 fsInit(void)
 	}
 
 	const u32 titleId = CURRENT_XBE_HEADER->CertificateHeader->TitleID;
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+	// Qualification images keep their configuration and emulated saves beside
+	// the test XBE. Never reuse a player's normal save directory in fixtures.
+	strncpy(saveDir, "D:\\qa-saves", FS_MAXPATH);
+	xboxMakeDirs(saveDir);
+#else
 	snprintf(saveDir, FS_MAXPATH, "E:\\UDATA\\%08X", (unsigned)titleId);
 	xboxMakeDirs(saveDir);
 	xboxInstallDashboardMetadata();
+#endif
 	sysLogPrintf(LOG_NOTE, "base dir: %s", baseDir);
 	sysLogPrintf(LOG_NOTE, "save dir: %s (title id 0x%08X)", saveDir, (unsigned)titleId);
 	return 0;

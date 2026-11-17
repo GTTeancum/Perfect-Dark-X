@@ -25,6 +25,12 @@ extern "C" {
 #include <pbkit/pbkit.h>
 #include <SDL.h>
 #include "../src/xbox/debug_xbox.h"
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+#include <hal/xbox.h>
+#include "../src/xbox/issue_probe_xbox.h"
+// nxdk HAL implementation entry point; used only for explicit SD qualification.
+void XVideoInit(DWORD mode, int width, int height, int bpp);
+#endif
 }
 
 #include "gfx_window_manager_api.h"
@@ -106,6 +112,14 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     g_can_720p = (encoder & VIDEO_MODE_720P) != 0;
     g_widescreen = dashboard_wide;
 
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    const bool qualify_sd = pdxIssueProbeForceSd() != 0;
+    if (qualify_sd) {
+        g_can_720p = false;
+        g_widescreen = false;
+    }
+#endif
+
     g_output_width = 640;
     g_output_height = 480;
     g_progressive = g_can_480p;
@@ -131,6 +145,22 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     if (!mode_ok) {
         sysFatalError("No compatible 640x480 Xbox video mode.");
     }
+
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    if (qualify_sd) {
+        // XVideoSetMode initializes the HAL's geometry but prefers 480p when
+        // enabled in EEPROM. Select nxdk's NTSC component 480i mode directly,
+        // without writing EEPROM or changing the console's saved preferences.
+        if ((encoder & VIDEO_ADAPTER_MASK) != AV_PACK_HDTV
+                || ((encoder & VIDEO_STANDARD_MASK) != 0x100
+                    && (encoder & VIDEO_STANDARD_MASK) != 0x200)) {
+            sysFatalError("IssueForceSD requires the qualified NTSC HDTV adapter.");
+        }
+        XVideoInit(0x0801010d, 640, 480, 32);
+        g_progressive = false;
+        sysLogPrintf(LOG_NOTE, "PHASE qualification SD mode=0x0801010d encoder=0x%08lx", (unsigned long)encoder);
+    }
+#endif
 
     VIDEO_MODE active_mode = XVideoGetMode();
     if (active_mode.width != g_output_width || active_mode.height != g_output_height) {

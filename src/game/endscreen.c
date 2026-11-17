@@ -288,7 +288,12 @@ char *endscreenMenuTextAccuracy(struct menuitem *item)
 		accuracy = 100.0f;
 	}
 
+#ifdef PLATFORM_XBOX
+	s32 tenths = (s32)(accuracy * 10.0f + 0.5f);
+	sprintf(g_StringPointer, "%d.%d%%", tenths / 10, tenths % 10);
+#else
 	sprintf(g_StringPointer, "%s%s%.1f%%", "", "", accuracy);
+#endif
 	return g_StringPointer;
 }
 

@@ -1,7 +1,9 @@
 # Xbox issue repairs — 2026-11-17
 
-Based on `origin/port` commit `86566c096` (v1.1.2). Changes and test artifacts
-are local; no release, push, or GitHub issue closure was performed.
+Based on `origin/port` commit `86566c096` (v1.1.2). Repairs and fast-input
+qualification were pushed directly to `port` in `b2eda4647` and `e94dd542f`.
+No release or GitHub issue closure was performed. Game data and native
+captures remain private in the repository's ignored `.local` directory.
 
 ## Findings and repairs
 
@@ -12,7 +14,9 @@ are local; no release, push, or GitHub issue closure was performed.
 | [#6: missing training statistics](https://github.com/GTTeancum/Perfect-Dark-X/issues/6) | The installed nxdk pdclib formatter omits floating-point conversions. The strings retain only their `s`/`%` suffixes. | Format bounded values with rounded integer hundredths/tenths. Cover firing-range results and HUD accuracy, plus the device/hologram training time callbacks. |
 
 The same formatting defect visibly affected EyeSpy speed and height. Those
-two HUD fields now also use integer decimal formatting.
+two HUD fields now also use integer decimal formatting. The physical follow-up
+also found and repaired the mission-end accuracy callback using the same
+integer tenths, with zero-shot, ordinary and capped-accuracy checks.
 
 ## XEMU evidence
 
@@ -57,7 +61,7 @@ watchdog of at most 180 seconds; these runs use 30–100 seconds.
 XEMU tolerates the baseline's invalid clip bounds: neither the menu stress
 nor the direct boundary probe reproduces the physical GPU halt. The repair
 addresses the invalid command identified by the hardware report, but the
-original menu-crash reproduction still requires physical-Xbox confirmation.
+original menu-crash reproduction required the physical follow-up below.
 
 ## Follow-up: fast simulated controller input
 
@@ -133,12 +137,137 @@ The hologram-results path also emits `0x02800285` for min=645/max=640,
 the same invalid interval used in the earlier hardware-report analysis.
 XEMU accepts those commands, so survival in the emulator alone cannot
 distinguish the broken and repaired builds. The changed command values are
-the differentiating evidence; physical Xbox confirmation remains necessary.
+the differentiating emulator evidence; see the physical follow-up below.
 
 Logs, native capture paths and ISO hashes are in `.local/evidence/` under
 `fixed-pad-controls`, `fixed-pad-training-6`, `fixed-pad-training-7`,
 `baseline-clip-pad-5` and `baseline-clip-pad-7`. The derived timing/count
 summary is `.local/evidence/fast-input-summary.json`.
+
+## Physical Xbox follow-up
+
+The user's retail 64 MiB CerBIOS console was tested through XBDM 1.00.5933.1.
+The initial launch selected the console's configured 720p mode. It is excluded
+from SD results; XBDM's ordinary screenshot command also failed inside the
+nxdk game. Subsequent qualification images explicitly selected NTSC 480i,
+640x480, 4:3, stock textures. This override is compile-guarded, restricted to
+the tested NTSC HDTV adapter, and does not change EEPROM preferences.
+
+An owned `PDX-QA-*` folder holds the deployment. All 2,043 deployed files
+were read back and verified against the host bytes. The runner verifies each
+replacement XBE, clears only its own previous log/capture, and warm-reboots
+to the launcher after each bounded run when XBDM remains reachable. It sends
+no controller commands over XBDM: the same process-local input harness drives
+the original menu code.
+The console's hardware revision and XBMC4Gamers launch path have not been
+matched to the issue reporter's setup.
+
+| SD menu | Actual transitions / duration | Controller polls | Maximum poll gap |
+| --- | ---: | ---: | ---: |
+| Control options | 918 / 40.005 s | 2,397 | 28.354 ms |
+| First-device results/list | 918 / 40.004 s | 2,396 | 36.352 ms |
+| First-hologram results/list | 918 / 40.005 s | 2,397 | 25.313 ms |
+
+All 918 transitions in each run arrived while the previous dialog was still
+opening/populating. Phase counts were 80, 160, 160, 480 and 38. The fastest
+phase therefore delivered 60 actual transitions/second for eight seconds.
+The legal empty bounds were reached through normal held/repeated input.
+No input rate limit, added GPU wait or flush was used to obtain this result.
+
+Existing 30-frame timing windows covering 2,400 frames per test report mean
+GPU drain waits of 0.002 ms. Maximum drain waits were 0.010 / 0.005 / 0.009 ms
+for controls/device/hologram respectively; maximum presentation queue waits
+were 0.112 / 0.126 / 0.232 ms. These counters do not measure all GPU work,
+but they do not show a sustained drain/queue stall in these repaired tests.
+
+The game-native captures show readable control and training dialogs. The
+numeric fixture passes all eleven checks and visibly shows `10.25s` and
+`83.3%`. However, the captured menu backgrounds are black, including a
+Research-menu test after its opening cutscene. The floating foreground model
+also remains visible. These captures establish menu survival and numeric
+rendering, not full menu visual correctness; the background needs a separate
+diagnosis. Native reads of both the small blur texture and its full-screen
+render target contain the room image, narrowing the fault to composition.
+A post-stress draw trace confirms the background triangles are submitted.
+Disabling unnecessary depth processing did not fix the visible result, and
+that experimental change was reverted. No speculative renderer change is
+included in this follow-up. The unattended mission-failure screen also exposed
+a `%f` accuracy field outside the training screens covered by #6. That field
+now uses integer tenths, and all three additional checks pass on hardware
+(`0.0%`, `83.3%`, `100.0%`), alongside the eleven training checks.
+The original mission-results dialog visibly shows `83.3%`, 12 shots and
+10 head hits in `hardware-sd-mission-fixture/native-038.png`. This is a
+display-only fixture: its status/title fields do not represent real mission
+completion or saved progression. Unattended attempts to capture the same
+field were unreliable: one caught the red death transition, and the later
+one still showed active EyeSpy. They are not accepted as mission-results proof.
+
+A 100-second EyeSpy capture was rejected as camera evidence:
+Joanna had died while unattended, and a missing-agent save prompt covered
+the screen. Cancelling that prompt exposed the mission-failure screen.
+Execution markers alone had incorrectly suggested the lens was still visible.
+The subsequent `hardware-sd-spy-early` native capture, taken 50 seconds after
+the first game tick, shows the room through the lens, a guard at its left
+edge, and readable `S/MPS 0.00` / `H/M 0.98` values while Joanna is alive.
+
+The original-clipping comparator stopped responding during phase 4 of
+`hardware-sd-matched-baseline`. XBDM became unreachable, so neither native
+error capture nor the watchdog's warm reboot could complete. The user
+power-cycled the console; XBDM and the launcher were then verified again.
+The recovered on-disk log ends immediately after:
+
+```text
+NV2A PERF scissor baseline_invalid=1 input=645,126,24,206 target=640x480 packed=02800285,01620094
+```
+
+This is min X=645/max X=640, matching the inverted interval identified in
+the original hardware report. The paired fixed build completes 919 transitions
+in 40.009 seconds and emits legal equal endpoints. This supports the invalid
+clip diagnosis; there is no native photograph/capture of the physical halt,
+so its exact on-screen error text is unverified. The old runner also exposed
+a race when a reboot timed out: its JSON lacked `reboot_status`. The runner
+now waits for the watchdog result and has a passing simulated-disconnect
+regression check. `fault=false` in that old report only means no error text
+was captured; it is not evidence that the console remained functional.
+
+The paired fixed capture ended on Game Files after an automatic startup menu
+change. It is not accepted as proof of sustained input on the hologram pair.
+The harness now waits for startup to settle and counts swipes outside the
+original dialog definitions; accepted repeat runs require
+`unexpected_swipes=0` as well as the completion marker.
+
+The verified repeats all complete exactly 918 transitions in 40.000 seconds,
+with 2,398 controller polls and zero unexpected swipes. Maximum poll gaps are
+25.413 ms (controls), 23.714 ms (device) and 25.163 ms (hologram). Their native
+captures show the intended dialog pairs. These are
+`hardware-sd-final-controls`, `hardware-sd-final-device`, and
+`hardware-sd-dialog-verified`. The hologram run includes a single renderer
+trace at frame 4000, after the timed input interval; controls/device do not.
+
+Qualification builds now store saves/configuration in `D:\qa-saves` within
+their deployment, and skip normal dashboard-metadata installation. Earlier
+hardware probes used the normal title save path. The direct-stage EyeSpy
+fixture cancels only the known missing-agent/save-elsewhere prompts using
+their original cancel handlers. This is not a save-persistence test.
+
+Native image capture writes one completed game framebuffer to a lossless PPM,
+then transfers it through XBDM and converts it to PNG. Capture occurs after
+the timed input interval, so disk/image work does not slow the stress phases.
+The optional HAL capture reads the game's native pbkit error framebuffer
+using symbols from the exact matching `pd.map`; it does not capture the host
+desktop. Every JSON execution result still requires separate visual review.
+
+Host evidence is under `.local/evidence/hardware-sd-*`, with the deployment
+manifest in `hardware-deploy` and aggregate measurements in
+`hardware-summary.json`. The first HD run's old `execution_ok` flag is not
+accepted as proof: the runner was subsequently corrected to fail missing
+captures. The initial `hardware-sd-training-7` attempt failed before launch
+while XBDM was restarting; `hardware-sd-training-7-retry` is the measured run.
+Visual acceptance/rejection is recorded separately in
+`.local/evidence/physical-visual-review.json`, rather than inferred from
+`execution_ok`. At handoff, the normal release XBE replaced the qualification
+image in the owned deployment, its bytes were read back and verified, the
+test boot INI was removed, and XDK Launcher was confirmed running.
 
 ## Repeating the probes
 
@@ -154,6 +283,7 @@ Build with `-DPD_XBOX_QUALIFICATION_CONFIG=ON`. Pack a `pdx_boot.ini` using
 | Controller options: fast simulated pad input | 38 | 5 |
 | First-device results/list: fast simulated pad input | 38 | 6 |
 | First-hologram results/list: fast simulated pad input | 38 | 7 |
+| Mission-end accuracy display fixture (10 hits / 12 shots) | 38 | 8 |
 
 Run from the repository with Windows Python and the installed Pillow library:
 
@@ -169,9 +299,29 @@ python scripts/pdx_issue_probe.py --iso build-xbox-fixed/input-5.iso `
   --require 'PDX_INPUT complete scenario=5'
 ```
 
-The runner validates repository-local config/media paths, prevents concurrent
-probe launches, captures UART, and writes a JSON execution report. Native
-capture can use a previously verified pointer RVA via `--native-rva`; that
+For the physical console, keep the endpoint and owned deployment path in
+ignored `.local/hardware-target.json` (`debug_host`, `debug_port`,
+`deployment_directory`). The folder must contain `pdx-qa-owner.json`
+identifying this project and the privately extracted loose assets. Use
+`scripts/pdx_xbdm.py` for native file transfer; every mutating path must stay
+inside that owned deployment. Set `IssueForceSD=1` and
+`IssueCaptureAfterMs=60000` in the qualification boot INI for menu probes.
+For Research EyeSpy, capture at 50000 ms, before unattended combat kills
+Joanna. These settings are not available in normal release images.
+
+```powershell
+python scripts/pdx_hardware_probe.py --xbe build-xbox-fixed/default.xbe `
+  --boot-ini .local/boot-hardware-7.ini --name hardware-holo-repeat `
+  --seconds 100 --capture-at 82 --game-capture `
+  --require 'PDX_INPUT complete scenario=7' `
+  --require 'unexpected_swipes=0' --require 'PDX_CAPTURE written=1'
+```
+
+The runners validate repository-local config/media paths, prevent concurrent
+probe launches, capture UART or XBDM logs, and write a JSON execution report.
+The hardware runner's disconnected-watchdog regression can be repeated with
+`python scripts/test_pdx_hardware_probe.py` without a console connection.
+XEMU native capture can use a previously verified pointer RVA via `--native-rva`; that
 address is specific to the emulator binary. A successful execution report
 requires separate visual review and does not certify gameplay correctness.
 
@@ -201,3 +351,5 @@ multiplayer, PAL, or 720p qualification. Audio buffers advance with nonzero
 samples, but audible output and physical controllers were not tested. The
 copied guest disk also reports dashboard-metadata copy access errors at
 startup; save persistence and that separate condition remain unverified.
+On physical hardware, menu backgrounds remain black despite populated blur
+textures. This unresolved visual defect prevents full menu qualification.

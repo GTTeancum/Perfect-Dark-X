@@ -21,10 +21,15 @@
 #include "../../fast3d/gfx_nv2a.h"
 
 extern struct menudialogdef g_CiControlOptionsMenuDialog;
+extern struct menudialogdef g_SoloMissionEndscreenFailedMenuDialog;
+extern struct menudialogdef g_PakNotOriginalMenuDialog, g_FilemgrSaveElsewhereMenuDialog;
+extern MenuItemHandlerResult filemgrReinsertedCancelMenuHandler(s32, struct menuitem *, union handlerdata *);
+extern MenuItemHandlerResult filemgrCancelSave2MenuHandler(s32, struct menuitem *, union handlerdata *);
 extern char *frMenuTextTimeTakenValue(struct menuitem *item);
 extern char *frMenuTextAccuracyValue(struct menuitem *item);
 extern char *dtMenuTextTimeTakenValue(struct menuitem *item);
 extern char *htMenuTextTimeTakenValue(struct menuitem *item);
+extern char *endscreenMenuTextAccuracy(struct menuitem *item);
 static s32 scenario;
 static unsigned ticks;
 static unsigned swipes;
@@ -36,6 +41,14 @@ static unsigned phase_swipes, phase_edges, phase_reversals;
 static u64 previous_poll, maximum_poll_gap;
 static s32 previous_direction;
 static bool input_finished;
+static unsigned menu_setup_tick;
+static struct menudialogdef *expected_dialogs[8];
+static unsigned expected_dialog_count, unexpected_swipes;
+static s32 force_sd, capture_after_ms;
+static u64 capture_started;
+static bool captured;
+extern volatile u32 g_SPXBFramebufferData, g_SPXBFramebufferPitch;
+extern volatile u32 g_SPXBFramebufferWidth, g_SPXBFramebufferHeight;
 
 static void probeLog(const char *fmt, ...)
 {
@@ -44,6 +57,8 @@ static void probeLog(const char *fmt, ...)
     va_start(args, fmt);
     vsnprintf(line, sizeof(line), fmt, args);
     va_end(args);
+    /* Preserve qualification results on physical consoles without COM1. */
+    sysLogPrintf(LOG_NOTE, "%s", line);
     serialPuts(line);
     serialPutc('\n');
 }
@@ -51,6 +66,35 @@ static void probeLog(const char *fmt, ...)
 s32 pdxIssueProbeInputEnabled(void)
 {
     return scenario >= 5 && scenario <= 7;
+}
+
+s32 pdxIssueProbeForceSd(void)
+{
+    return force_sd;
+}
+
+static void captureCompletedFrame(void)
+{
+    u32 width = g_SPXBFramebufferWidth, height = g_SPXBFramebufferHeight;
+    u32 pitch = g_SPXBFramebufferPitch;
+    const u8 *pixels = (const u8 *)g_SPXBFramebufferData;
+    if (!pixels || width > 1920 || !width || !height || height > 1080 || pitch < width * 4) return;
+    FILE *file = fopen("D:\\pdx-qa-frame.ppm", "wb");
+    if (!file) return;
+    bool ok = fprintf(file, "P6\n%u %u\n255\n", width, height) > 0;
+    u8 row[1920 * 3];
+    for (u32 y = 0; y < height && ok; ++y) {
+        const u8 *src = pixels + y * pitch;
+        for (u32 x = 0; x < width; ++x) {
+            row[x * 3] = src[x * 4 + 2];
+            row[x * 3 + 1] = src[x * 4 + 1];
+            row[x * 3 + 2] = src[x * 4];
+        }
+        ok = fwrite(row, 3, width, file) == width;
+    }
+    ok = fclose(file) == 0 && ok;
+    captured = true;
+    probeLog("PDX_CAPTURE written=%d scenario=%d width=%u height=%u ticks=%u", ok, scenario, width, height, ticks);
 }
 
 /* Inject only into this Xbox process, before libultra's controller sample
@@ -107,6 +151,14 @@ s32 pdxIssueProbeReadPad(s32 idx, OSContPad *pad)
 void pdxIssueProbeMenuSwipe(s32 direction, s32 outgoingstate)
 {
     if (!pdxIssueProbeInputEnabled() || !input_started || input_finished) return;
+    struct menudialogdef *actual = g_Menus[g_MpPlayerNum].curdialog->definition;
+    bool expected = false;
+    for (unsigned i = 0; i < expected_dialog_count; ++i)
+        if (actual == expected_dialogs[i]) expected = true;
+    if (!expected) {
+        if (++unexpected_swipes == 1)
+            probeLog("PDX_INPUT unexpected-dialog definition=%p", actual);
+    }
     ++menu_swipes;
     if (outgoingstate < MENUDIALOGSTATE_POPULATED) ++opening_swipes;
     if (menu_swipes <= 8 || menu_swipes % 100 == 0)
@@ -156,20 +208,53 @@ static void testTrainingText(void)
     device->timetaken = device_time;
     holo->timetaken = holo_time;
     probeLog("PDX_ISSUE text-tests checks=11 failures=%u", failures);
+    s32 saved_shots[7];
+    memcpy(saved_shots, g_Vars.currentplayerstats->shotcount, sizeof(saved_shots));
+    memset(g_Vars.currentplayerstats->shotcount, 0, sizeof(saved_shots));
+    unsigned endscreen_failures = checkText("mission-zero-shots", endscreenMenuTextAccuracy(NULL), "0.0%");
+    g_Vars.currentplayerstats->shotcount[SHOTREGION_TOTAL] = 12;
+    g_Vars.currentplayerstats->shotcount[SHOTREGION_HEAD] = 10;
+    endscreen_failures += checkText("mission-accuracy", endscreenMenuTextAccuracy(NULL), "83.3%");
+    g_Vars.currentplayerstats->shotcount[SHOTREGION_TOTAL] = 1;
+    endscreen_failures += checkText("mission-capped-accuracy", endscreenMenuTextAccuracy(NULL), "100.0%");
+    memcpy(g_Vars.currentplayerstats->shotcount, saved_shots, sizeof(saved_shots));
+    probeLog("PDX_ISSUE mission-text-tests checks=3 failures=%u", endscreen_failures);
 }
 
 PD_CONSTRUCTOR static void issueProbeConfig(void)
 {
-    configRegisterInt("Game.IssueProbe", &scenario, 0, 7);
+    configRegisterInt("Game.IssueProbe", &scenario, 0, 8);
+    configRegisterInt("Game.IssueForceSD", &force_sd, 0, 1);
+    configRegisterInt("Game.IssueCaptureAfterMs", &capture_after_ms, 0, 150000);
 }
 
 void pdxIssueProbeTick(void)
 {
+    if (!capture_started) capture_started = sysGetMicroseconds();
+    if (capture_after_ms && !captured && sysGetMicroseconds() - capture_started >= (u64)capture_after_ms * 1000)
+        captureCompletedFrame();
     if (!scenario || g_Vars.stagenum >= STAGE_TITLE) return;
     ++ticks;
-    if (ticks == 120) {
+    if (scenario == 3 && g_Menus[g_MpPlayerNum].curdialog) {
+        // Direct BootStage skips agent-file selection. Cancel only its known
+        // missing-file/save-elsewhere prompts through the original handlers;
+        // this fixture does not test saving or change a player's save files.
+        struct menudialogdef *def = g_Menus[g_MpPlayerNum].curdialog->definition;
+        if (def == &g_PakNotOriginalMenuDialog) {
+            probeLog("PDX_ISSUE fixture cancel missing-agent-save");
+            filemgrReinsertedCancelMenuHandler(MENUOP_SET, NULL, NULL);
+        } else if (def == &g_FilemgrSaveElsewhereMenuDialog) {
+            probeLog("PDX_ISSUE fixture cancel save-elsewhere");
+            filemgrCancelSave2MenuHandler(MENUOP_SET, NULL, NULL);
+        }
+    }
+    if ((!pdxIssueProbeInputEnabled() && ticks == 120)
+            // Let direct-stage startup and its initial file menus settle before
+            // installing the specific dialog pair under test.
+            || (pdxIssueProbeInputEnabled() && !menu_setup_tick && ticks >= 600 && !g_InCutscene)) {
         probeLog("PDX_ISSUE begin scenario=%d", scenario);
         if (pdxIssueProbeInputEnabled()) {
+            menu_setup_tick = ticks;
             if (scenario == 5) {
                 menuPushRootDialog(&g_CiControlOptionsMenuDialog, MENUROOT_MAINMENU);
             } else if (scenario == 6) {
@@ -182,6 +267,11 @@ void pdxIssueProbeTick(void)
                 menuPushRootDialog(&g_HtCompletedMenuDialog, MENUROOT_TRAINING);
             }
             struct menu *menu = &g_Menus[g_MpPlayerNum];
+            struct menulayer *layer = &menu->layers[menu->depth - 1];
+            expected_dialog_count = layer->numsiblings;
+            if (expected_dialog_count > 8) expected_dialog_count = 8;
+            for (unsigned i = 0; i < expected_dialog_count; ++i)
+                expected_dialogs[i] = layer->siblings[i]->definition;
             probeLog("PDX_INPUT setup scenario=%d siblings=%d", scenario,
                      menu->layers[menu->depth - 1].numsiblings);
         } else if (scenario == 4) {
@@ -203,6 +293,15 @@ void pdxIssueProbeTick(void)
             probeLog("PDX_ISSUE clip checks=4 complete");
         } else if (scenario == 1) {
             menuPushRootDialog(&g_CiControlOptionsMenuDialog, MENUROOT_MAINMENU);
+        } else if (scenario == 8) {
+            // Display-only mission-results fixture; no mission is completed or
+            // saved. Use the original dialog and its repaired accuracy callback.
+            memset(g_Vars.currentplayerstats->shotcount, 0,
+                   sizeof(g_Vars.currentplayerstats->shotcount));
+            g_Vars.currentplayerstats->shotcount[SHOTREGION_TOTAL] = 12;
+            g_Vars.currentplayerstats->shotcount[SHOTREGION_HEAD] = 10;
+            menuPushRootDialog(&g_SoloMissionEndscreenFailedMenuDialog, MENUROOT_ENDSCREEN);
+            probeLog("PDX_ISSUE mission-display-fixture accuracy=[%s]", endscreenMenuTextAccuracy(NULL));
         } else if (scenario == 2) {
             struct frdata *fr = frGetData();
             fr->timetaken = PAL ? 513 : 615;
@@ -224,7 +323,7 @@ void pdxIssueProbeTick(void)
                          time_text, accuracy_text);
         }
     }
-    if (pdxIssueProbeInputEnabled() && ticks == 180) {
+    if (pdxIssueProbeInputEnabled() && menu_setup_tick && ticks == menu_setup_tick + 60) {
         input_started = sysGetMicroseconds();
         probeLog("PDX_INPUT begin duration_ms=40000 phases=5 scenario=%d", scenario);
     }
@@ -233,10 +332,10 @@ void pdxIssueProbeTick(void)
         probeLog("PDX_INPUT phase-end phase=%d edges=%u reversals=%u swipes=%u",
                  input_phase, input_edges - phase_edges,
                  input_reversals - phase_reversals, menu_swipes - phase_swipes);
-        probeLog("PDX_INPUT complete scenario=%d elapsed_ms=%u polls=%u edges=%u reversals=%u swipes=%u opening_swipes=%u max_poll_gap_us=%u",
+        probeLog("PDX_INPUT complete scenario=%d elapsed_ms=%u polls=%u edges=%u reversals=%u swipes=%u opening_swipes=%u max_poll_gap_us=%u unexpected_swipes=%u",
                  scenario, (unsigned)((sysGetMicroseconds() - input_started) / 1000),
                  input_polls, input_edges, input_reversals, menu_swipes, opening_swipes,
-                 (unsigned)maximum_poll_gap);
+                 (unsigned)maximum_poll_gap, unexpected_swipes);
     }
     if (scenario == 1 && ticks > 180 && ticks < 2400 && ticks % 3 == 0) {
         /* Direct transition stress: one request per three main ticks.

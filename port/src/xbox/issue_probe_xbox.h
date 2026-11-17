@@ -3,6 +3,7 @@
 #include <ultra64.h>
 void pdxIssueProbeTick(void);
 s32 pdxIssueProbeInputEnabled(void);
+s32 pdxIssueProbeForceSd(void);
 s32 pdxIssueProbeReadPad(s32 idx, OSContPad *pad);
 void pdxIssueProbeMenuSwipe(s32 direction, s32 outgoingstate);
 #endif
