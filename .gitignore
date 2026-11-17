@@ -1,4 +1,7 @@
 *.o
+/.local/
+/*.zip
+/*.7z
 *.pyc
 *.dll
 *.exe

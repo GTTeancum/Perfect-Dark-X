@@ -3084,7 +3084,9 @@ extern "C" void gfx_copy_framebuffer(int fb_dst, int fb_src, int left, int top, 
     const bool is_main_fb = (fb_src == 0);
 
     if (is_main_fb) {
-        if (left > 0 && top > 0) {
+        if (left >= 0 && top >= 0) {
+            // Zero is a valid origin too (the EyeSpy copies the whole back
+            // buffer from 0,0). Only negative coordinates request scaling.
             // upscale the position
             left = left * gfx_current_dimensions.width / gfx_current_native_viewport.width;
             top = top * gfx_current_dimensions.height / gfx_current_native_viewport.height;

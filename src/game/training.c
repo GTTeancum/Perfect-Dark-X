@@ -3425,7 +3425,13 @@ f32 frGetAccuracy(char *buffer)
 		accuracy = 100.0f;
 	}
 
+#ifdef PLATFORM_XBOX
+	/* pdclib has no floating-point printf conversions. */
+	s32 hundredths = (s32)(accuracy * 100.0f + 0.5f);
+	sprintf(buffer, "%d.%02d%%\n", hundredths / 100, hundredths % 100);
+#else
 	sprintf(buffer, "%s%s%.2f%%\n", "", "", accuracy);
+#endif
 
 	return accuracy;
 }

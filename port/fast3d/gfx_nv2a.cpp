@@ -350,6 +350,7 @@ static struct {
     bool  use_alpha;
     bool  alpha_modulate;
 } g_rs = { 0, 0, 640, 480, 0, 0, 640, 480, true, true, 0.0f, 1.0f, false, false };
+static bool g_scissor_empty = false;
 
 static void nv2a_init_passthrough_shader(void);
 static void nv2a_upload_viewport_constants(void);
@@ -1923,15 +1924,33 @@ static void nv2a_set_scissor(int x, int y, int w, int h)
     g_rs.sc_h = h;
 
     int x0 = x < 0 ? 0 : x;
+    if (x0 > (int)g_target_width) x0 = (int)g_target_width;
     int x1 = x + w;
     if (x1 < x0) x1 = x0;
     if (x1 > (int)g_target_width) x1 = (int)g_target_width;
     int y0 = (int)g_target_height - (y + h);
     int y1 = (int)g_target_height - y;
     if (y0 < 0) y0 = 0;
+    if (y0 > (int)g_target_height) y0 = (int)g_target_height;
     if (y1 < y0) y1 = y0;
     if (y1 > (int)g_target_height) y1 = (int)g_target_height;
+    g_scissor_empty = x1 <= x0 || y1 <= y0;
 
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    if (x > (int)g_target_width || (int)g_target_height - (y + h) > (int)g_target_height) {
+        static unsigned corrected = 0;
+        if (++corrected <= 4 || corrected % 128 == 0) {
+            sysLogPrintf(LOG_NOTE, "NV2A PERF scissor corrected=%u input=%d,%d,%d,%d target=%ux%u packed=%08x,%08x",
+                         corrected, x, y, w, h, g_target_width, g_target_height,
+                         ((uint32_t)x1 << 16) | (uint32_t)x0,
+                         ((uint32_t)y1 << 16) | (uint32_t)y0);
+        }
+    }
+#endif
+
+    // Clamp BOTH edges before packing. A menu moving outside the target can
+    // otherwise leave min > max (e.g. 0x02000205), which halts NV2A with an
+    // invalid-data error. Empty intersections retain equal, legal endpoints.
     // Use NV2A window clip region 0 as scissor. gfx_pc supplies OpenGL-style
     // bottom-left coordinates, while the NV2A window clip is top-left.
     // Format: bits [11:0] = min (inclusive), bits [27:16] = max (exclusive).
@@ -2067,7 +2086,7 @@ static size_t nv2a_clip_triangle(const float *triangle, size_t stride,
 static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
                                  size_t buf_vbo_num_tris)
 {
-    if (!g_current_shader || buf_vbo_num_tris == 0) return;
+    if (!g_current_shader || buf_vbo_num_tris == 0 || g_scissor_empty) return;
     nv2a_prepare_textures_for_draw();
     g_dbg_tris += (unsigned)buf_vbo_num_tris;
     ++g_dbg_draws;

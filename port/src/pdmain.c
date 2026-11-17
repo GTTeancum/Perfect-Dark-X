@@ -1,4 +1,7 @@
 #include <stdlib.h>
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+#include "xbox/issue_probe_xbox.h"
+#endif
 
 #include <ultra64.h>
 #include <PR/ultrasched.h>
@@ -652,6 +655,9 @@ void mainTick(void)
 
 			PD_DBGMARK(312);
 			lvTick();
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+			pdxIssueProbeTick();
+#endif
 			PD_DBGMARK(313);
 			playermgrShuffle();
 			PD_DBGMARK(314);

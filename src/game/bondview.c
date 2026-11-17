@@ -1142,7 +1142,14 @@ Gfx *bviewDrawEyespyMetrics(Gfx *gdl)
 	}
 
 	// "S/MPS"
+#ifdef PLATFORM_XBOX
+	/* pdclib omits floating-point printf conversions. */
+	s32 speedhundredths = (s32)(movedist * 60.0f + 0.5f);
+	sprintf(text, "%s %2d.%02d", langGet(L_MISC_073),
+			speedhundredths / 100, speedhundredths % 100);
+#else
 	sprintf(text, "%s %s%5.2f", langGet(L_MISC_073), "", movedist * 0.6f);
+#endif
 	savedy = viewtop + 14;
 	textMeasure(&textheight, &textwidth, text, g_CharsHandelGothicXs, g_FontHandelGothicXs, 0);
 	x = viewleft + 25 * scale;
@@ -1160,7 +1167,13 @@ Gfx *bviewDrawEyespyMetrics(Gfx *gdl)
 #endif
 
 	// "H/M"
+#ifdef PLATFORM_XBOX
+	s32 heighthundredths = (s32)(g_Vars.currentplayer->eyespy->height + 0.5f);
+	sprintf(text, "%s %d.%02d", langGet(L_MISC_074),
+			heighthundredths / 100, heighthundredths % 100);
+#else
 	sprintf(text, "%s %s%4.2f", langGet(L_MISC_074), "", g_Vars.currentplayer->eyespy->height * 0.01f);
+#endif
 	savedy += 9;
 	textMeasure(&textheight, &textwidth, text, g_CharsHandelGothicXs, g_FontHandelGothicXs, 0);
 	x = viewleft + 25 * scale;

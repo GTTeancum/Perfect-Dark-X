@@ -28,6 +28,17 @@
 
 #define NUM_BIO_LOCATIONS 14
 
+#ifdef PLATFORM_XBOX
+/* nxdk's pdclib omits %f values. These short training
+ * times only need hundredths; keep the sign separate for aborted attempts. */
+static void trainingFormatSeconds(char *dst, f32 seconds)
+{
+	s32 hundredths = (s32)(fabsf(seconds) * 100.0f + 0.5f);
+	sprintf(dst, "%s%d.%02ds\n", seconds < 0 ? "-" : "",
+			hundredths / 100, hundredths % 100);
+}
+#endif
+
 struct menudialogdef g_BioProfileMenuDialog;
 struct menudialogdef g_BioTextMenuDialog;
 struct menudialogdef g_HangarLocationDetailsMenuDialog;
@@ -384,7 +395,11 @@ char *frMenuTextTimeTakenValue(struct menuitem *item)
 		sprintf(g_StringPointer, "%dm %2ds\n", mins, (s32)ceilf(secs));
 		return g_StringPointer;
 	} else {
+#ifdef PLATFORM_XBOX
+		trainingFormatSeconds(g_StringPointer, secs);
+#else
 		sprintf(g_StringPointer, "%s%s%2.2fs\n", "", "", secs);
+#endif
 	}
 
 	return g_StringPointer;
@@ -432,7 +447,12 @@ char *frMenuTextAccuracyValue(struct menuitem *item)
 		accuracy = 100.0f;
 	}
 
+#ifdef PLATFORM_XBOX
+	s32 tenths = (s32)(accuracy * 10.0f + 0.5f);
+	sprintf(g_StringPointer, "%d.%d%%\n", tenths / 10, tenths % 10);
+#else
 	sprintf(g_StringPointer, "%s%s%.1f%%\n", "", "", accuracy);
+#endif
 	return g_StringPointer;
 }
 
@@ -2064,7 +2084,11 @@ char *dtMenuTextTimeTakenValue(struct menuitem *item)
 		sprintf(g_StringPointer, "%dm %2ds\n", mins, (s32)ceilf(secs));
 		return g_StringPointer;
 	} else {
+#ifdef PLATFORM_XBOX
+		trainingFormatSeconds(g_StringPointer, secs);
+#else
 		sprintf(g_StringPointer, "%s%s%2.2fs\n", "", "", secs);
+#endif
 	}
 
 	return g_StringPointer;
@@ -2182,7 +2206,11 @@ char *htMenuTextTimeTakenValue(struct menuitem *item)
 		sprintf(g_StringPointer, "%dm %2ds\n", mins, (s32)ceilf(secs));
 		return g_StringPointer;
 	} else {
+#ifdef PLATFORM_XBOX
+		trainingFormatSeconds(g_StringPointer, secs);
+#else
 		sprintf(g_StringPointer, "%s%s%2.2fs\n", "", "", secs);
+#endif
 	}
 
 	return g_StringPointer;
