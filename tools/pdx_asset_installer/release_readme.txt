@@ -1,4 +1,4 @@
-PERFECT DARK X v1.1.3 - CANDIDATE
+PERFECT DARK X v1.1.3
 
 This build repairs Spy Cam rendering, rapid-menu GPU crashes and missing
 training statistics (issues #4, #5 and #6). The blurred menu background and
@@ -9,9 +9,13 @@ and memory probes are excluded from this executable.
 
 HARDWARE VERIFICATION
 
-The candidate has been tested on a retail 64 MiB CerBIOS Xbox with the
-replacement texture pack. The test report in docs/open-issue-repairs.md
-records the scenes, memory measurements and outstanding controller comparison.
+The fixes were confirmed on a retail 64 MiB CerBIOS Xbox. The hardware
+audit used the replacement texture pack in SD and native 720p.
+
+If you already installed the withdrawn 1.1.3 package, replace default.xbe in
+your installed game folder with the copy from this ZIP. The version shown
+at startup is the same. The tested default.xbe has SHA-256
+60f5cbe11d127dcab47bd179514d58b0dc4d61c1994515301c3bf826d4fded3e.
 
 COMPLETE DISTRIBUTION
 

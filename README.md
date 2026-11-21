@@ -34,20 +34,16 @@ have not been resized or captured from the desktop.
 
 ## Release status
 
-**Version 1.1.3 remains withdrawn. The repaired menu backgrounds have been
-verified on a retail 64 MiB Xbox in SD and 720p. The controller comparison
-with the published v1.1.2 build is pending. Version 1.1.2 remains public.**
+**Version 1.1.3 is available.** It restores blurred menu backgrounds in SD
+and native 720p, repairs Spy Cam rendering, fixes crashes during rapid menu
+navigation, and restores missing numeric readouts. The fixes were confirmed
+on a retail 64 MiB CerBIOS Xbox.
 
-The pending 1.1.3 build repairs SD Spy Cam corruption, rapid menu
-navigation crashes, and missing numeric training statistics in issues
-[#4](https://github.com/GTTeancum/Perfect-Dark-X/issues/4),
-[#5](https://github.com/GTTeancum/Perfect-Dark-X/issues/5), and
-[#6](https://github.com/GTTeancum/Perfect-Dark-X/issues/6). It retains the
-normal presentation safeguards and disables qualification input and tracing.
-The hardware audit used a retail 64 MiB CerBIOS Xbox in NTSC 480i and
-native 720p with the replacement texture pack. The [test report](docs/open-issue-repairs.md)
-records the hardware captures, memory measurements and earlier XEMU results. If a problem returns, please open an issue with your setup,
-mission/location, and the current `pd.log` collected before relaunching.
+Hardware measurements, reproduction steps and test coverage are recorded in
+the [Xbox test report](docs/open-issue-repairs.md). The original reports are
+[Spy Cam corruption (#4)](https://github.com/GTTeancum/Perfect-Dark-X/issues/4),
+[rapid menu crashes (#5)](https://github.com/GTTeancum/Perfect-Dark-X/issues/5)
+and [missing training statistics (#6)](https://github.com/GTTeancum/Perfect-Dark-X/issues/6).
 
 Version 1.1 introduced a visible startup version number and restored 480i
 support for SDTVs.
@@ -90,9 +86,9 @@ to avoid the SD startup hang reported in issues
 
 The 720p path verifies both the active Xbox video raster and pbkit back buffer
 before continuing. If the mode or its recoverable surface allocation fails,
-the game falls back to dashboard-aspect 640x480. The public v1.1.2 build
-disables framebuffer effects at 720p. The current source enables the full
-effects and keeps a 1 MiB replacement-texture cache on the 64 MiB console.
+the game falls back to dashboard-aspect 640x480. Version 1.1.3 enables the
+full framebuffer effects at 720p and keeps a 1 MiB replacement-texture cache
+on the 64 MiB console.
 
 Earlier stationary split-screen measurements with the v1.1.2 renderer were:
 
@@ -107,8 +103,6 @@ explosion benchmarks.
 
 ### Known limitations
 
-- The withdrawn v1.1.3 package showed black menu backgrounds. The current
-  source restores the room blur in SD and 720p retail-hardware tests.
 - Visual parity is still being refined, particularly framebuffer-dependent
   effects and some scripted presentation at 720p.
 - The 720p frame cap is a target. Actual frame times vary by scene and effect.
@@ -119,7 +113,7 @@ explosion benchmarks.
 
 ## Installing the release
 
-[Download Perfect Dark X v1.1.2](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.2)
+[Download Perfect Dark X v1.1.3](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.3)
 
 Every release includes the complete distribution: the game executable, asset
 installer, texture pack, dashboard assets, instructions, license, and checksums.
@@ -128,21 +122,24 @@ patches or executable-only downloads. See [release packaging](docs/RELEASING.md)
 
 Existing v1.0, v1.1, v1.1.1, and v1.1.2 assets and saves remain compatible.
 
-Changes in the withdrawn v1.1.3 build (not currently available for download):
+### Changes in v1.1.3
 
-- Correct SD Spy Cam framebuffer copies beginning at the top-left origin.
-- Clamp both ends of GPU clip rectangles and skip empty clipped triangles,
-  preventing invalid GPU commands during rapid menu navigation. Input speed
-  is unchanged; the repair adds no input throttle or GPU flush.
-- Restore firing-range time and accuracy, device/hologram training times,
-  EyeSpy speed/height, and mission-end accuracy with integer decimal formatting.
-- Display version 1.1.3 on startup.
+- Restore the blurred room behind menus in SD and 720p, including after
+  repeated pauses and resumes with Spy Cam active.
+- Correct SD Spy Cam framebuffer copies. Moving the 720p lens copy to the GPU
+  raised the tested scene from roughly 15 FPS to 30 FPS.
+- Fix invalid GPU clipping commands triggered by rapid left/right menu input.
+  Six physical-console runs completed 4,641 transitions across three menu flows.
+- Restore numeric training and mission statistics, scanner and zoom readouts,
+  multiplayer statistics and percentage sliders.
+- Recover 2.19 MiB of renderer memory. The fifth 720p pause still accommodated
+  a 4 MiB contiguous allocation on the 64 MiB test console. Pause/resume
+  transitions can still hitch.
 
-The physical fast-input tests completed 918 transitions in 40 seconds in
-each of three menu flows, including a phase reversing direction every poll
-at 60 polls/second. Eleven training-text checks and three mission-accuracy
-checks passed. These targeted checks do not establish complete visual,
-audio, controller, save-persistence, or campaign qualification.
+If you installed the withdrawn 1.1.3 ZIP, replace the Xbox game's
+`default.xbe` with the one in this download. Both builds display version 1.1.3.
+The hardware-tested executable has SHA-256
+`60f5cbe11d127dcab47bd179514d58b0dc4d61c1994515301c3bf826d4fded3e`.
 
 Changes in v1.1.2:
 

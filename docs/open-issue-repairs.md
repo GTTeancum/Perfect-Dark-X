@@ -5,7 +5,8 @@ qualification were pushed directly to `port` in `b2eda4647` and `e94dd542f`.
 The physical follow-up is in `2eca85d62`. The v1.1.3 release was withdrawn
 after publication. The bounded near-plane correction below restores SD menu
 backgrounds on the physical Xbox. Memory savings also restore the full effect
-at native 720p on 64 MiB hardware; release qualification remains incomplete.
+at native 720p on 64 MiB hardware. After the hardware audit and owner
+confirmation, the corrected build became the public v1.1.3 release.
 Game data and native captures remain private in the
 repository's ignored `.local` directory.
 
@@ -684,7 +685,8 @@ The final qualification XBE
 changes only the multiplayer statistics fixture setup and capture timing
 relative to that binary's source. Each run records its deployed XBE hash.
 
-The normal image was restored to the owned test folder. The public release
-remains v1.1.2. The controller-driven comparison with the original v1.1.2
-binary, audible output, saving and a full-campaign soak remain unverified
-in this audit.
+The normal image was restored to the owned test folder. The owner subsequently
+confirmed the fix and approved publication. The corrected
+[v1.1.3 release](https://github.com/GTTeancum/Perfect-Dark-X/releases/tag/v1.1.3)
+uses the normal XBE hash above. The owner did not provide a test-by-test
+checklist. Audio, saving and a full-campaign soak were outside this audit.
