@@ -120,15 +120,11 @@ s32 videoInit(void)
 
 #ifdef PLATFORM_XBOX
 	if (gfx_xbox_wm_is_720p()) {
-		// Native 720p consumes roughly 11 MiB more pbkit surface memory than
-		// the 480-line path. Full-size blur/history surfaces do not fit beside
-		// the mandatory 16 MiB game heap, so this optional tier renders directly.
-		gfx_framebuffers_enabled = false;
 		if (vidFramerateLimit == 0 || vidFramerateLimit > 30) {
 			vidFramerateLimit = 30;
 		}
 		sysLogPrintf(LOG_NOTE,
-				"Xbox 720p tier: framebuffer effects disabled, 30 FPS cap");
+				"Xbox 720p tier: full framebuffer effects, 30 FPS cap");
 	}
 #endif
 
@@ -594,6 +590,13 @@ void videoResetFramebuffer(void)
 {
 	return gfx_reset_framebuffer();
 }
+
+#ifdef PLATFORM_XBOX
+void videoDiscardFramebuffer(s32 target)
+{
+	gfx_xbox_discard_framebuffer(target);
+}
+#endif
 
 s32 videoFramebuffersSupported(void)
 {

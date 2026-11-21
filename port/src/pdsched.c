@@ -310,6 +310,9 @@ void schedEndFrame(OSSched *sc)
 	schedAudioFrame(sc);
 	schedRenderCrashPeriodically(sc->frameCount);
 	videoEndFrame();
+#ifdef PLATFORM_XBOX
+	menugfxReleaseUnusedBlur();
+#endif
 
 	if (g_MainIsBooting == 0) {
 		schedConsiderScreenshot();

@@ -54,6 +54,11 @@ static bool g_MenuBlurDone = false;
  */
 void menugfxCreateBlur(void)
 {
+#ifdef PLATFORM_XBOX
+	// Called after the completed gameplay frame. Lens images are refreshed
+	// before every use and are no longer needed by the incoming pause menu.
+	videoDiscardFramebuffer(g_PrevFrameFb);
+#endif
 #ifdef PLATFORM_N64
 	u8 *fb = (u8 *) viGetFrontBuffer();
 	s32 dstx;
@@ -138,6 +143,18 @@ void menugfxCreateBlur(void)
 	g_MenuBlurDone = false;
 #endif
 }
+
+#ifdef PLATFORM_XBOX
+void menugfxReleaseUnusedBlur(void)
+{
+	// Retain the full image through the closing fade; release only once no
+	// menu background remains. The next opening takes a fresh capture.
+	if (g_MenuData.count == 0 && g_MenuData.bg == 0 && g_MenuData.nextbg == 255) {
+		videoDiscardFramebuffer(g_MenuScreenFb);
+		g_MenuBlurDone = false;
+	}
+}
+#endif
 
 Gfx *menugfxRenderBgBlur(Gfx *gdl, u32 colour, s16 arg2, s16 arg3)
 {

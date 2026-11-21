@@ -121,6 +121,25 @@ static std::map<ColorCombinerKey, struct ColorCombiner> color_combiner_pool;
 static std::map<ColorCombinerKey, struct ColorCombiner>::iterator prev_combiner = color_combiner_pool.end();
 
 static uint8_t* tex_upload_buffer = nullptr;
+#ifdef PLATFORM_XBOX
+static size_t tex_upload_capacity = 0;
+
+static void reserve_texture_upload(size_t bytes)
+{
+    // Conversion scratch does not retain pixels after upload. Grow for the
+    // actual texture instead of reserving a maximum-size 4 MiB image at boot.
+    const size_t limit = 1024u * 1024u * 4u;
+    if (!bytes || bytes > limit) sysFatalError("Invalid texture conversion size: %u", (unsigned)bytes);
+    if (bytes <= tex_upload_capacity) return;
+    size_t capacity = 16384;
+    while (capacity < bytes) capacity *= 2;
+    free(tex_upload_buffer);
+    tex_upload_buffer = (uint8_t *)malloc(capacity);
+    if (!tex_upload_buffer) sysFatalError("Texture conversion allocation failed: %u", (unsigned)capacity);
+    tex_upload_capacity = capacity;
+    sysLogPrintf(LOG_NOTE, "Xbox texture conversion scratch: %u bytes", (unsigned)capacity);
+}
+#endif
 
 static struct RSP {
     float modelview_matrix_stack[11][4][4];
@@ -1165,6 +1184,10 @@ static void import_texture(int i, int tile, bool importReplacement) {
     }
 #endif
 
+#ifdef PLATFORM_XBOX
+    if (siz > G_IM_SIZ_32b) sysFatalError("Invalid texture conversion format");
+    reserve_texture_upload((size_t)loaded_texture.size_bytes << (3 - siz));
+#endif
     if (fmt == G_IM_FMT_RGBA) {
         if (siz == G_IM_SIZ_16b) {
             import_texture_rgba16(tile, loaded_texture, rdp.tex_lod);
@@ -2862,11 +2885,13 @@ extern "C" void gfx_init(const GfxInitSettings *settings) {
         segmentPointers[i] = 0;
     }
 
+#ifndef PLATFORM_XBOX
     if (tex_upload_buffer == nullptr) {
         // We cap texture max to 8k, because why would you need more?
         int max_tex_size = std::min(8192, gfx_rapi->get_max_texture_size());
         tex_upload_buffer = (uint8_t*)malloc(max_tex_size * max_tex_size * 4);
     }
+#endif
 
     rsp.lookat[0].dir[0] = rsp.lookat[1].dir[1] = 0x7F;
     rsp.current_lookat_coeffs[0][0] = rsp.current_lookat_coeffs[1][1] = 1.f;

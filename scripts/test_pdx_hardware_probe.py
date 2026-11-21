@@ -57,6 +57,17 @@ class OfflineXbox:
 
 
 class HardwareRunnerTests(unittest.TestCase):
+    def test_native_capture_resumes_title_when_read_fails(self):
+        commands = []
+        class CaptureXbox:
+            def command(self, command):
+                commands.append(command)
+                return '200- OK'
+        with patch.object(probe.time, 'sleep'), self.assertRaisesRegex(EOFError, 'capture read failed'):
+            with probe.stopped_title(CaptureXbox()):
+                raise EOFError('capture read failed')
+        self.assertEqual(commands, ['stop', 'go'])
+
     def test_failed_deadline_reboot_is_recorded_before_report(self):
         root = Path(__file__).resolve().parents[1]
         temporary = root / '.local/tmp'

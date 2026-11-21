@@ -39,6 +39,7 @@ s32 videoGetHeight(void);
 f32 videoGetAspect(void);
 #ifdef PLATFORM_XBOX
 s32 videoIs720p(void);
+void videoDiscardFramebuffer(s32 target);
 #endif
 s32 videoGetFullscreen(void);
 s32 videoGetFullscreenMode(void);

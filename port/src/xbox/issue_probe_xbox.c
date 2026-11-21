@@ -44,9 +44,14 @@ static bool input_finished;
 static unsigned menu_setup_tick;
 static struct menudialogdef *expected_dialogs[8];
 static unsigned expected_dialog_count, unexpected_swipes;
-static s32 force_sd, capture_after_ms;
+static s32 force_sd, force_wide, capture_after_ms;
 static u64 capture_started;
 static bool captured;
+static u64 pause_input_started;
+static bool pause_verified;
+static unsigned pause_cycles, unpause_cycles;
+static s32 last_pausemode = -1;
+static u64 spy_ready_time;
 extern volatile u32 g_SPXBFramebufferData, g_SPXBFramebufferPitch;
 extern volatile u32 g_SPXBFramebufferWidth, g_SPXBFramebufferHeight;
 
@@ -65,12 +70,17 @@ static void probeLog(const char *fmt, ...)
 
 s32 pdxIssueProbeInputEnabled(void)
 {
-    return scenario >= 5 && scenario <= 7;
+    return (scenario >= 5 && scenario <= 7) || scenario == 9 || scenario == 10;
 }
 
 s32 pdxIssueProbeForceSd(void)
 {
     return force_sd;
+}
+
+s32 pdxIssueProbeForceWide(void)
+{
+    return force_wide;
 }
 
 static void captureCompletedFrame(void)
@@ -102,6 +112,17 @@ static void captureCompletedFrame(void)
 s32 pdxIssueProbeReadPad(s32 idx, OSContPad *pad)
 {
     if (idx != 0) return -1;
+    if (scenario == 9 || scenario == 10) {
+        if (scenario == 10 && pause_input_started) {
+            u64 elapsed = sysGetMicroseconds() - pause_input_started;
+            if (elapsed < 48100000 && elapsed % 6000000 < 100000)
+                pad->button = START_BUTTON;
+            return 0;
+        }
+        if (pause_input_started && sysGetMicroseconds() - pause_input_started < 100000)
+            pad->button = START_BUTTON;
+        return 0;
+    }
     if (!input_started || input_finished) return 0;
     u64 now = sysGetMicroseconds();
     u32 elapsed = (u32)(now - input_started);
@@ -223,8 +244,9 @@ static void testTrainingText(void)
 
 PD_CONSTRUCTOR static void issueProbeConfig(void)
 {
-    configRegisterInt("Game.IssueProbe", &scenario, 0, 8);
+    configRegisterInt("Game.IssueProbe", &scenario, 0, 10);
     configRegisterInt("Game.IssueForceSD", &force_sd, 0, 1);
+    configRegisterInt("Game.IssueForceWide", &force_wide, 0, 1);
     configRegisterInt("Game.IssueCaptureAfterMs", &capture_after_ms, 0, 150000);
 }
 
@@ -235,7 +257,7 @@ void pdxIssueProbeTick(void)
         captureCompletedFrame();
     if (!scenario || g_Vars.stagenum >= STAGE_TITLE) return;
     ++ticks;
-    if (scenario == 3 && g_Menus[g_MpPlayerNum].curdialog) {
+    if ((scenario == 3 || scenario == 9 || scenario == 10) && g_Menus[g_MpPlayerNum].curdialog) {
         // Direct BootStage skips agent-file selection. Cancel only its known
         // missing-file/save-elsewhere prompts through the original handlers;
         // this fixture does not test saving or change a player's save files.
@@ -247,6 +269,43 @@ void pdxIssueProbeTick(void)
             probeLog("PDX_ISSUE fixture cancel save-elsewhere");
             filemgrCancelSave2MenuHandler(MENUOP_SET, NULL, NULL);
         }
+    }
+    if (scenario == 9 || scenario == 10) {
+        if (scenario == 10 && !g_InCutscene && g_Vars.currentplayer->eyespy) {
+            if (!spy_requested) {
+                g_Vars.currentplayer->devicesactive |= DEVICE_EYESPY;
+                spy_requested = true;
+                probeLog("PDX_PAUSE eyespy requested before menu cycles");
+            }
+            if (!spy_ready_time && g_Vars.currentplayer->eyespy->active)
+                spy_ready_time = sysGetMicroseconds();
+        }
+        // Exercise the ordinary Start -> playerPause -> menu path. Never push
+        // a dialog or set pause state here; original game code must do both.
+        if (!pause_input_started && ticks >= 600 && !g_InCutscene
+                && !g_Menus[g_MpPlayerNum].curdialog
+                && g_Vars.currentplayer->pausemode == PAUSEMODE_UNPAUSED
+                && (scenario == 9 || (spy_ready_time && sysGetMicroseconds() - spy_ready_time >= 6000000))) {
+            pause_input_started = sysGetMicroseconds();
+            probeLog("PDX_PAUSE Start pulse begin");
+        }
+        if (pause_input_started && !pause_verified
+                && sysGetMicroseconds() - pause_input_started >= 2000000
+                && g_Vars.currentplayer->pausemode == PAUSEMODE_PAUSED
+                && g_Menus[g_MpPlayerNum].curdialog && g_MenuData.bg == MENUBG_BLUR) {
+            pause_verified = true;
+            probeLog("PDX_PAUSE ordinary path complete root=%d bg=%d", g_MenuData.root, g_MenuData.bg);
+        }
+        if (scenario == 10 && pause_input_started) {
+            s32 mode = g_Vars.currentplayer->pausemode;
+            if (mode != last_pausemode) {
+                if (mode == PAUSEMODE_PAUSED) ++pause_cycles;
+                if (mode == PAUSEMODE_UNPAUSED && pause_cycles) ++unpause_cycles;
+                last_pausemode = mode;
+                probeLog("PDX_PAUSE cycles=%u resumes=%u mode=%d", pause_cycles, unpause_cycles, mode);
+            }
+        }
+        return;
     }
     if ((!pdxIssueProbeInputEnabled() && ticks == 120)
             // Let direct-stage startup and its initial file menus settle before

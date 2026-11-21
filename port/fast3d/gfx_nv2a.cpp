@@ -24,6 +24,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cassert>
+#include <cfloat>
 #include <map>
 #include <vector>
 #include <utility>
@@ -31,6 +32,7 @@
 extern "C" {
 #include <xboxkrnl/xboxkrnl.h>
 #include <hal/debug.h>
+#include <hal/video.h>
 #include <pbkit/pbkit.h>
 }
 
@@ -130,6 +132,7 @@ static inline void nv2a_copy_pixels(uint32_t *dst, const uint32_t *src,
 // Reserve ID zero as the invalid handle, so the backend needs one extra slot.
 #define MAX_GAME_TEXTURES 1025
 #define MAX_FRAMEBUFFERS  32
+#define MAX_FRAMEBUFFER_DIMENSION 2048u
 #define MAX_TEXTURES      (MAX_GAME_TEXTURES + MAX_FRAMEBUFFERS)
 #define TEXTURE_TILE_COUNT 2
 #define NV2A_TEXTURE_STAGE_COUNT 4
@@ -173,6 +176,18 @@ static inline uint32_t nv2a_texture_pitch(const NV2ATexture &texture)
 }
 
 static NV2ATexture g_textures[MAX_TEXTURES];
+// HAL retains a full-size boot/error framebuffer after pbkit starts scanning
+// its own surfaces. One CPU-written lens snapshot can borrow that allocation.
+// HAL keeps ownership; it is never freed here or used as a GPU render target.
+static NV2ATexture *g_hal_snapshot_owner = nullptr;
+
+static void nv2a_release_owned_pixels(NV2ATexture &texture)
+{
+    if (g_hal_snapshot_owner == &texture) g_hal_snapshot_owner = nullptr;
+    else if (texture.vram) MmFreeContiguousMemory(texture.vram);
+    texture.vram = nullptr;
+}
+
 static int         g_active_texture[TEXTURE_TILE_COUNT] = { -1, -1 };
 static int         g_last_selected_tile = 0;
 
@@ -620,10 +635,8 @@ static const char *nv2a_get_name(void)
 
 static int nv2a_get_max_texture_size(void)
 {
-    // NV2A supports up to 4096, but on the 64 MB Xbox this value also sizes
-    // gfx_pc's tex_upload_buffer (max_tex_size^2 * 4 bytes): 2048 -> 16 MB,
-    // 1024 -> 4 MB. PD's N64 textures are TMEM-bound (<=4 KB); the only large
-    // case is framebuffer-as-texture at 640x480, which fits comfortably in 1024.
+    // Asset texture limit; conversion scratch grows on demand. Linear render
+    // targets have their own dimensions and also support native 1280x720.
     return 1024;
 }
 
@@ -967,8 +980,7 @@ static void nv2a_upload_texture(const uint8_t *rgba32_buf,
 
     // Free old allocation if size changed
     if (t.vram) {
-        MmFreeContiguousMemory(t.vram);
-        t.vram = nullptr;
+        nv2a_release_owned_pixels(t);
     }
 
     // Allocate contiguous physical memory for the texture
@@ -1829,8 +1841,7 @@ static void nv2a_delete_texture(uint32_t texID)
     }
     NV2ATexture &t = g_textures[texID];
     if (t.vram) {
-        MmFreeContiguousMemory(t.vram);
-        t.vram = nullptr;
+        nv2a_release_owned_pixels(t);
     }
     t = {};
 }
@@ -1995,6 +2006,16 @@ static unsigned g_dbg_draws = 0;
 // varyings exactly as homogeneous rasterization requires.
 #define NV2A_MAX_VERTEX_FLOATS 64u
 #define NV2A_MAX_CLIPPED_VERTICES 12u
+
+// gfx_pc has already mapped depth to [0,w]. The menu's exact near plane
+// rounds to z=-2^-16, w=10; NV2A rejects it even with depth writes disabled.
+// Repair only that small rounding interval (16 float epsilons in z/w).
+// Preserve genuinely out-of-range geometry and every other vertex component.
+static float nv2a_snap_near_roundoff(float z, float w)
+{
+    const float tolerance = 16.0f * FLT_EPSILON;
+    return w > 0.0f && w <= FLT_MAX && z < 0.0f && z >= -tolerance * w ? 0.0f : z;
+}
 
 static float nv2a_clip_distance(const float *v, unsigned plane)
 {
@@ -2180,6 +2201,20 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
             (unsigned long)bindings.const_color[1],
             g_rs.depth_test ? 1 : 0, g_rs.depth_write ? 1 : 0,
             g_rs.use_alpha ? 1 : 0);
+        if (tex0 >= MAX_GAME_TEXTURES) {
+            for (size_t vi = 0; vi < nverts && vi < 6; ++vi) {
+                const float *v = buf_vbo + vi * stride;
+                char depth_trace[256];
+                snprintf(depth_trace, sizeof(depth_trace),
+                    "RDEPTH v=%u z=%08x w=%08x ndcz=%08x range=%08x,%08x fb=%d sc=%d,%d,%d,%d",
+                    (unsigned)vi, f2u(v[2]), f2u(v[3]), f2u(v[2] / v[3]),
+                    f2u(g_rs.znear), f2u(g_rs.zfar), g_current_framebuffer,
+                    g_rs.sc_x, g_rs.sc_y, g_rs.sc_w, g_rs.sc_h);
+                sysLogPrintf(LOG_NOTE, "%s", depth_trace);
+                serialPuts(depth_trace);
+                serialPuts("\n");
+            }
+        }
     }
 #endif
     const float *fog_color = prg.opt_fog ? buf_vbo + fog_base : nullptr;
@@ -2517,6 +2552,20 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
             sa = input_component(bindings.specular_alpha, 3, 0.0f);
         }
 
+#ifdef PD_XBOX_RENDER_TRACE_FRAME
+        const float original_z = pz;
+#endif
+        pz = nv2a_snap_near_roundoff(pz, pw);
+#ifdef PD_XBOX_RENDER_TRACE_FRAME
+        if (g_frame_count == (uint32_t)PD_XBOX_RENDER_TRACE_FRAME &&
+            g_active_texture[0] >= MAX_GAME_TEXTURES) {
+            char line[128];
+            snprintf(line, sizeof(line), "RDEPTH_SUBMIT in=%08x out=%08x w=%08x\n",
+                     f2u(original_z), f2u(pz), f2u(pw));
+            sysLogPrintf(LOG_NOTE, "%s", line);
+            serialPuts(line);
+        }
+#endif
         dst.position[0] = px; dst.position[1] = py;
         dst.position[2] = pz; dst.position[3] = pw;
         dst.diffuse = nv2a_pack_argb(cr, cg, cb, ca);
@@ -2601,6 +2650,37 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
 
 static void nv2a_init(void)
 {
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    // Captured failure plus invariants on both sides of the narrow bound.
+    struct Sample { float z, w, expected; };
+    const Sample samples[] = {
+        {-1.0f/65536.0f, 10.0f, 0.0f},
+        {-1.0f/524288.0f, 1.0f, 0.0f},
+        {-1.0f/262144.0f, 1.0f, -1.0f/262144.0f},
+        {-0.001f, 10.0f, -0.001f},
+        {-10.0f, 10.0f, -10.0f},
+        {-1.0f, 0.0f, -1.0f},
+        {-1.0f, -1.0f, -1.0f},
+        {0.0f, 10.0f, 0.0f},
+        {0.00001f, 10.0f, 0.00001f},
+        {5.0f, 10.0f, 5.0f},
+        {10.0f, 10.0f, 10.0f},
+        {11.0f, 10.0f, 11.0f},
+        {-1.0f, __builtin_inff(), -1.0f},
+        {-__builtin_inff(), 10.0f, -__builtin_inff()},
+        {__builtin_nanf(""), 10.0f, __builtin_nanf("")},
+        {-0.0f, 10.0f, -0.0f},
+    };
+    unsigned failures = 0;
+    for (const Sample &sample : samples)
+        failures += f2u(nv2a_snap_near_roundoff(sample.z, sample.w)) != f2u(sample.expected);
+    char guard_line[128];
+    snprintf(guard_line, sizeof(guard_line), "RDEPTH_GUARD checks=16 failures=%u\n", failures);
+    sysLogPrintf(LOG_NOTE, "%s", guard_line);
+    serialPuts(guard_line);
+    if (failures) sysFatalError("Near-plane guard regression");
+#endif
+
     unsigned sync_trace = 0;
 #if defined(PD_XBOX_GPU_SYNC_TRACE)
     g_gpu_sync_trace_active = true;
@@ -2609,6 +2689,7 @@ static void nv2a_init(void)
     sysLogPrintf(LOG_NOTE, "NV2A TRACE BUILD id=%s sync=%u",
                  NV2A_RUNTIME_BUILD_ID, sync_trace);
     memset(g_textures, 0, sizeof(g_textures));
+    g_hal_snapshot_owner = nullptr;
     memset(g_framebuffers, 0, sizeof(g_framebuffers));
     g_framebuffers[0].used = true;
     g_framebuffer_count = 1;
@@ -3145,6 +3226,15 @@ static void nv2a_finish_render(void)
     }
 #endif
     const ULONGLONG gpu_complete = KeQueryPerformanceCounter();
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    if (g_frame_count % 60u == 0) {
+        MM_STATISTICS memory = {};
+        memory.Length = sizeof(memory);
+        const NTSTATUS memory_result = MmQueryStatistics(&memory);
+        sysLogPrintf(LOG_NOTE, "PDX_MEMORY status=%08lx available_pages=%lu frame=%u",
+                     (unsigned long)memory_result, (unsigned long)memory.AvailablePages, g_frame_count);
+    }
+#endif
 #if defined(PD_XBOX_PRESENT_TRACE)
     const bool end_overlap = nv2a_target_is_scanout(g_dbg_fb);
     g_present_end_overlap += end_overlap;
@@ -3162,6 +3252,7 @@ static void nv2a_finish_render(void)
                      (unsigned long)nv2a_mmio_read(0x00600800u));
     }
     if (++g_present_samples == 60u) {
+
 #if defined(PD_XBOX_ISSUE3_DIAGNOSTIC)
         MM_STATISTICS mm = {};
         mm.Length = sizeof(mm);
@@ -3380,23 +3471,71 @@ static void nv2a_wait_for_gpu(void)
     pb_wait_until_gr_not_busy();
 }
 
+extern "C" void gfx_xbox_discard_framebuffer(int fb_id)
+{
+    NV2ATexture *texture = nv2a_framebuffer_texture(fb_id);
+    if (!texture || (!texture->vram && !texture->alias_vram)) return;
+    if (fb_id == g_current_framebuffer) sysFatalError("Discarding active framebuffer");
+    nv2a_wait_for_gpu();
+    nv2a_release_owned_pixels(*texture);
+    texture->alias_vram = nullptr;
+    texture->alias_pitch = 0;
+    ++texture->content_version;
+    for (int tile = 0; tile < TEXTURE_TILE_COUNT; ++tile) {
+        if (g_active_texture[tile] == (int)g_framebuffers[fb_id].texture_id)
+            g_active_texture[tile] = -1;
+    }
+    memset(g_hw_texture, 0, sizeof(g_hw_texture));
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    sysLogPrintf(LOG_NOTE, "PDX_MEMORY discarded framebuffer=%d", fb_id);
+#endif
+}
+
 static void nv2a_store_active_framebuffer(void)
 {
     if (g_current_framebuffer <= 0) return;
     NV2ATexture *dst = nv2a_framebuffer_texture(g_current_framebuffer);
-    DWORD *src = pb_extra_buffer(0);
-    if (!dst || !dst->vram || !src) return;
-    dst->alias_vram = nullptr;
-    dst->alias_pitch = 0;
-    const uint32_t src_pitch = pb_back_buffer_pitch();
+    if (!dst || !dst->vram) return;
+    // The GPU renders into the final texture; no full-resolution scratch copy.
     nv2a_wait_for_gpu();
-    for (uint32_t y = 0; y < dst->height; ++y) {
-        nv2a_copy_pixels(
-            (uint32_t *)((uint8_t *)dst->vram + y * dst->pitch),
-            (const uint32_t *)((const uint8_t *)src + y * src_pitch),
-            dst->width);
-    }
     ++dst->content_version;
+    memset(g_hw_texture, 0, sizeof(g_hw_texture));
+}
+
+static void nv2a_ensure_framebuffer_storage(NV2ATexture &texture, bool cpu_snapshot = false)
+{
+    if (!cpu_snapshot && g_hal_snapshot_owner == &texture) {
+        nv2a_wait_for_gpu();
+        nv2a_release_owned_pixels(texture);
+    }
+    if (texture.vram) return;
+    const uint32_t bytes = texture.pitch * texture.height;
+    if (cpu_snapshot && !g_hal_snapshot_owner) {
+        uint32_t *hal = (uint32_t *)XVideoGetFB();
+        const VIDEO_MODE mode = XVideoGetMode();
+        const uint32_t physical = (uint32_t)(uintptr_t)hal & 0x03ffffffu;
+        if (hal && mode.bpp == 32 && mode.width == texture.width && mode.height == texture.height
+                && texture.pitch == mode.width * 4u
+                && physical != ((uint32_t)(uintptr_t)g_dbg_fb & 0x03ffffffu)
+                && physical != ((uint32_t)(uintptr_t)g_last_presented_fb & 0x03ffffffu)
+                && physical != nv2a_mmio_read(0x00600800u)
+                && MmQueryAllocationSize(hal) >= bytes) {
+            texture.vram = hal;
+            g_hal_snapshot_owner = &texture;
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+            sysLogPrintf(LOG_NOTE, "PDX_MEMORY borrowed HAL snapshot bytes=%u", bytes);
+#endif
+            return;
+        }
+    }
+    if (!texture.pitch || !texture.height) sysFatalError("Invalid framebuffer storage dimensions");
+    texture.vram = (uint32_t *)MmAllocateContiguousMemoryEx(
+        bytes, 0, 0xFFFFFFFF, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
+    if (!texture.vram) sysFatalError("NV2A framebuffer allocation failed: %u bytes", bytes);
+    memset(texture.vram, 0, bytes);
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+    sysLogPrintf(LOG_NOTE, "PDX_MEMORY framebuffer=%ux%u bytes=%u", texture.width, texture.height, bytes);
+#endif
 }
 
 static void nv2a_set_target_surface(int fb_id)
@@ -3406,7 +3545,21 @@ static void nv2a_set_target_surface(int fb_id)
         g_target_width = pb_back_buffer_width();
         g_target_height = pb_back_buffer_height();
     } else {
-        pb_target_extra_buffer(0);
+        NV2ATexture &target = *nv2a_framebuffer_texture(fb_id);
+        if (target.width > pb_back_buffer_width() || target.height > pb_back_buffer_height()
+                || target.pitch < target.width * 4u || target.pitch > 0xffffu || (target.pitch & 63u))
+            sysFatalError("Framebuffer exceeds the shared depth surface or pitch limits");
+        nv2a_ensure_framebuffer_storage(target);
+        // Establish pbkit's shared depth surface and format, then bind the
+        // final linear color texture through its full-RAM DMA object (3).
+        pb_target_back_buffer();
+        uint32_t *target_commands = pb_begin();
+        target_commands = pb_push1(target_commands, NV20_TCL_PRIMITIVE_3D_SET_OBJECT3, 3);
+        target_commands = pb_push1(target_commands, NV097_SET_SURFACE_PITCH,
+            (pb_back_buffer_pitch() << 16) | target.pitch);
+        target_commands = pb_push1(target_commands, NV097_SET_SURFACE_COLOR_OFFSET,
+            (uint32_t)(uintptr_t)target.vram & 0x03ffffffu);
+        pb_end(target_commands);
         g_target_width = g_framebuffers[fb_id].width;
         g_target_height = g_framebuffers[fb_id].height;
     }
@@ -3452,7 +3605,7 @@ static void nv2a_update_framebuffer_parameters(int fb_id,
         return;
     }
     if (fb_id <= 0 || fb_id >= g_framebuffer_count) return;
-    if (!width || !height || width > 1024 || height > 1024) {
+    if (!width || !height || width > MAX_FRAMEBUFFER_DIMENSION || height > MAX_FRAMEBUFFER_DIMENSION) {
         sysLogPrintf(LOG_ERROR, "NV2A: invalid framebuffer %d size %ux%u",
                      fb_id, width, height);
         return;
@@ -3469,24 +3622,14 @@ static void nv2a_update_framebuffer_parameters(int fb_id,
     texture.alias_vram = nullptr;
     texture.alias_pitch = 0;
     const uint32_t pitch = (width * 4u + 63u) & ~63u;
-    const uint32_t bytes = pitch * height;
     if (texture.vram &&
         (texture.width != width || texture.height != height ||
          texture.pitch != pitch)) {
-        MmFreeContiguousMemory(texture.vram);
-        texture.vram = nullptr;
+        nv2a_wait_for_gpu();
+        nv2a_release_owned_pixels(texture);
     }
-    if (!texture.vram) {
-        texture.vram = (uint32_t *)MmAllocateContiguousMemoryEx(
-            bytes, 0, 0xFFFFFFFF, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
-        if (!texture.vram) {
-            sysLogPrintf(LOG_ERROR,
-                         "NV2A: framebuffer allocation failed (%ux%u)",
-                         width, height);
-            return;
-        }
-        memset(texture.vram, 0, bytes);
-    }
+    // Allocate only when pixels are copied or rendered. Snapshot aliases and
+    // unused effects need metadata, not another full-resolution color buffer.
     texture.used = true;
     texture.width = width;
     texture.height = height;
@@ -3660,7 +3803,7 @@ static void nv2a_copy_framebuffer(int fb_dst, int fb_src,
     if (fb_dst <= 0 || fb_dst >= g_framebuffer_count ||
         fb_src < 0 || fb_src >= g_framebuffer_count) return;
     NV2ATexture *dst_texture = nv2a_framebuffer_texture(fb_dst);
-    if (!dst_texture || !dst_texture->vram) return;
+    if (!dst_texture) return;
 
     const uint8_t *src_base = nullptr;
     uint32_t src_pitch = 0, src_width = 0, src_height = 0;
@@ -3673,8 +3816,10 @@ static void nv2a_copy_framebuffer(int fb_dst, int fb_src,
         src_width = pb_back_buffer_width();
         src_height = pb_back_buffer_height();
     } else if (fb_src == g_current_framebuffer) {
-        src_base = (const uint8_t *)pb_extra_buffer(0);
-        src_pitch = pb_back_buffer_pitch();
+        NV2ATexture *source = nv2a_framebuffer_texture(fb_src);
+        if (!source || !nv2a_texture_data(*source)) return;
+        src_base = (const uint8_t *)nv2a_texture_data(*source);
+        src_pitch = nv2a_texture_pitch(*source);
         src_width = g_framebuffers[fb_src].width;
         src_height = g_framebuffers[fb_src].height;
     } else {
@@ -3712,6 +3857,8 @@ static void nv2a_copy_framebuffer(int fb_dst, int fb_src,
         return;
     }
 
+    nv2a_ensure_framebuffer_storage(*dst_texture,
+        fb_src == FB_BACK_BUFFER && use_back && dst_width == src_width && dst_height == src_height);
     nv2a_wait_for_gpu();
     dst_texture->alias_vram = nullptr;
     dst_texture->alias_pitch = 0;
@@ -3755,7 +3902,7 @@ static void nv2a_copy_framebuffer(int fb_dst, int fb_src,
         return;
     }
 
-    uint16_t source_x[1024];
+    uint16_t source_x[MAX_FRAMEBUFFER_DIMENSION];
     ++g_dbg_fb_copy_scaled;
     if (box_filter) ++g_dbg_fb_copy_box;
     if (!box_filter) {
@@ -3851,7 +3998,7 @@ static void nv2a_select_texture_fb(int fb_id)
         return;
     }
     NV2ATexture *texture = nv2a_framebuffer_texture(fb_id);
-    if (!texture || !texture->vram) return;
+    if (!texture || !nv2a_texture_data(*texture)) return;
     g_active_texture[0] = (int)g_framebuffers[fb_id].texture_id;
     g_last_selected_tile = 0;
     texture->linear_filter = true;

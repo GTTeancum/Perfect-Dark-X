@@ -116,7 +116,7 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
     const bool qualify_sd = pdxIssueProbeForceSd() != 0;
     if (qualify_sd) {
         g_can_720p = false;
-        g_widescreen = false;
+        g_widescreen = pdxIssueProbeForceWide() != 0;
     }
 #endif
 
@@ -158,7 +158,8 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
         }
         XVideoInit(0x0801010d, 640, 480, 32);
         g_progressive = false;
-        sysLogPrintf(LOG_NOTE, "PHASE qualification SD mode=0x0801010d encoder=0x%08lx", (unsigned long)encoder);
+        sysLogPrintf(LOG_NOTE, "PHASE qualification SD mode=0x0801010d encoder=0x%08lx aspect=%s",
+                     (unsigned long)encoder, g_widescreen ? "16:9" : "4:3");
     }
 #endif
 
@@ -200,16 +201,9 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
                      g_progressive ? "progressive" : "interlaced");
     }
 
-    // The renderer uses one full-size, non-rotating surface as a scratch render
-    // target.  Persistent game framebuffers are copied to/from their own
-    // compact texture allocations, so a single extra pbkit surface is enough
-    // for menu blur and any future offscreen pass without spending ~1.2 MiB on
-    // each of the game's many 16x16 capture buffers.
-    // At 720p one scratch surface costs another 3.5 MiB. The optional mode
-    // disables framebuffer effects and renders directly to the back buffer so
-    // the 16 MiB game heap remains available.
-    const bool initializing_720p = gfx_xbox_wm_is_720p();
-    pb_extra_buffers(initializing_720p ? 0 : 1);
+    // Logical targets render directly into their final textures. No duplicate
+    // screen-sized scratch surface is needed at either SD or 720p.
+    pb_extra_buffers(0);
 
     // Startup commands can exceed pbkit's default 512 KiB pushbuffer before
     // the first frame reset at SD resolutions too (GitHub issues #1/#2).
@@ -249,7 +243,7 @@ static void xbox_wm_init(const struct GfxWindowInitSettings *settings)
             sysFatalError("720p fallback could not set 640x480 video mode.");
         }
         // pb_kill/pb_init preserve the configured pushbuffer size.
-        pb_extra_buffers(1);
+        pb_extra_buffers(0);
         pb_err = pb_init();
         pb_geometry_ok = pb_err == 0
             && pb_back_buffer_width() == (DWORD)g_output_width

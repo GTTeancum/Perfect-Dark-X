@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 extern struct GfxRenderingAPI gfx_nv2a_api;
+void gfx_xbox_discard_framebuffer(int fb_id);
 
 // Draw a self-contained black loading frame through pbkit while the normal
 // fast3d frame loop is suspended for a synchronous stage reset.
