@@ -14,12 +14,21 @@
 #include "types.h"
 #include "bss.h"
 #include "game/menu.h"
+#include "game/mainmenu.h"
+#include "game/bondgun.h"
+#include "game/hudmsg.h"
+#include "game/inv.h"
+#include "game/options.h"
+#include "game/mplayer/setup.h"
+#include "lib/memp.h"
 #include "game/training.h"
 #include "issue_probe_xbox.h"
 #include "serial_xbox.h"
 #include <pbkit/pbkit.h>
+#include <xboxkrnl/xboxkrnl.h>
 #include "../../fast3d/gfx_nv2a.h"
 
+extern struct menudialogdef g_MpPlayerStatsMenuDialog;
 extern struct menudialogdef g_CiControlOptionsMenuDialog;
 extern struct menudialogdef g_SoloMissionEndscreenFailedMenuDialog;
 extern struct menudialogdef g_PakNotOriginalMenuDialog, g_FilemgrSaveElsewhereMenuDialog;
@@ -30,7 +39,9 @@ extern char *frMenuTextAccuracyValue(struct menuitem *item);
 extern char *dtMenuTextTimeTakenValue(struct menuitem *item);
 extern char *htMenuTextTimeTakenValue(struct menuitem *item);
 extern char *endscreenMenuTextAccuracy(struct menuitem *item);
-static s32 scenario;
+static s32 scenario, reserve_mib, menu_probe_mib, fatal_after_lens;
+static void *memory_reserve;
+static bool menu_probe_done, blur_requested, zoom_requested;
 static unsigned ticks;
 static unsigned swipes;
 static bool spy_requested;
@@ -70,7 +81,7 @@ static void probeLog(const char *fmt, ...)
 
 s32 pdxIssueProbeInputEnabled(void)
 {
-    return (scenario >= 5 && scenario <= 7) || scenario == 9 || scenario == 10;
+    return (scenario >= 5 && scenario <= 7) || scenario == 9 || scenario == 10 || scenario == 14;
 }
 
 s32 pdxIssueProbeForceSd(void)
@@ -112,6 +123,10 @@ static void captureCompletedFrame(void)
 s32 pdxIssueProbeReadPad(s32 idx, OSContPad *pad)
 {
     if (idx != 0) return -1;
+    if (scenario == 14) {
+        if (zoom_requested) pad->button = R_TRIG;
+        return 0;
+    }
     if (scenario == 9 || scenario == 10) {
         if (scenario == 10 && pause_input_started) {
             u64 elapsed = sysGetMicroseconds() - pause_input_started;
@@ -211,6 +226,9 @@ static void testTrainingText(void)
     failures += checkText("negative-time", frMenuTextTimeTakenValue(NULL), "-0.50s\n");
     fr->timetaken = PAL ? 3125 : 3750;
     failures += checkText("minute-time", frMenuTextTimeTakenValue(NULL), "1m  3s\n");
+    fr->timetaken = (PAL ? 50 : 60) * 120 - 1;
+    if (checkText("minute-rollover", frMenuTextTimeTakenValue(NULL), "2m  0s\n"))
+        sysFatalError("Training minute rollover check failed");
     fr->timetaken = PAL ? 10000 : 12000;
     failures += checkText("time-limit", frMenuTextTimeTakenValue(NULL), "2m  0s\n");
     fr->timetaken = PAL ? 513 : 615;
@@ -244,7 +262,10 @@ static void testTrainingText(void)
 
 PD_CONSTRUCTOR static void issueProbeConfig(void)
 {
-    configRegisterInt("Game.IssueProbe", &scenario, 0, 10);
+    configRegisterInt("Game.IssueFatalAfterLens", &fatal_after_lens, 0, 1);
+    configRegisterInt("Game.IssueMenuProbeMiB", &menu_probe_mib, 0, 4);
+    configRegisterInt("Game.IssueReserveMiB", &reserve_mib, 0, 4);
+    configRegisterInt("Game.IssueProbe", &scenario, 0, 14);
     configRegisterInt("Game.IssueForceSD", &force_sd, 0, 1);
     configRegisterInt("Game.IssueForceWide", &force_wide, 0, 1);
     configRegisterInt("Game.IssueCaptureAfterMs", &capture_after_ms, 0, 150000);
@@ -253,11 +274,29 @@ PD_CONSTRUCTOR static void issueProbeConfig(void)
 void pdxIssueProbeTick(void)
 {
     if (!capture_started) capture_started = sysGetMicroseconds();
-    if (capture_after_ms && !captured && sysGetMicroseconds() - capture_started >= (u64)capture_after_ms * 1000)
+    if (scenario == 11) {
+        // Capture inside the original Horizon Scanner sequence in the Air Base intro.
+        if (!captured && g_Vars.stagenum == STAGE_AIRBASE && g_InCutscene &&
+                g_CutsceneAnimNum == ANIM_CUT_CAVE_INTRO_CAM &&
+                g_CutsceneCurAnimFrame60 >= 960 && g_CutsceneCurAnimFrame60 < 1400) {
+            probeLog("PDX_SCANNER intro frame=%d", g_CutsceneCurAnimFrame60);
+            captureCompletedFrame();
+        }
+    } else if (capture_after_ms && !captured && sysGetMicroseconds() - capture_started >= (u64)capture_after_ms * 1000) {
         captureCompletedFrame();
+    }
+    if (!memory_reserve && reserve_mib && g_Vars.stagenum < STAGE_TITLE) {
+        // Keep real memory occupied while the stage, lens and menu coexist.
+        // The Xbox kernel reclaims this fixture allocation at title teardown.
+        size_t bytes = (size_t)reserve_mib * 1024u * 1024u;
+        memory_reserve = MmAllocateContiguousMemory(bytes);
+        if (!memory_reserve) sysFatalError("Qualification reserve allocation failed");
+        memset(memory_reserve, 0xa5, bytes);
+        probeLog("PDX_RESERVE held bytes=%u", (unsigned)bytes);
+    }
     if (!scenario || g_Vars.stagenum >= STAGE_TITLE) return;
     ++ticks;
-    if ((scenario == 3 || scenario == 9 || scenario == 10) && g_Menus[g_MpPlayerNum].curdialog) {
+    if ((scenario == 3 || scenario == 9 || scenario == 10 || scenario == 12 || scenario == 14) && g_Menus[g_MpPlayerNum].curdialog) {
         // Direct BootStage skips agent-file selection. Cancel only its known
         // missing-file/save-elsewhere prompts through the original handlers;
         // this fixture does not test saving or change a player's save files.
@@ -269,6 +308,31 @@ void pdxIssueProbeTick(void)
             probeLog("PDX_ISSUE fixture cancel save-elsewhere");
             filemgrCancelSave2MenuHandler(MENUOP_SET, NULL, NULL);
         }
+    }
+    if (scenario == 14) {
+        if (!zoom_requested && !g_InCutscene && ticks > 180 && !g_Menus[g_MpPlayerNum].curdialog) {
+            invGiveSingleWeapon(WEAPON_SNIPERRIFLE);
+            bgunEquipWeapon2(HAND_RIGHT, WEAPON_SNIPERRIFLE);
+            optionsSetShowZoomRange(g_Vars.currentplayerstats->mpindex, true);
+            zoom_requested = true;
+        }
+        if (!captured && zoom_requested && hudmsgIsZoomRangeVisible()) {
+            static unsigned visible_ticks;
+            if (++visible_ticks == 60) {
+                captureCompletedFrame();
+                probeLog("PDX_ISSUE zoom HUD visible");
+            }
+        }
+        return;
+    }
+    if (scenario == 12) {
+        if (!blur_requested && !g_InCutscene && ticks > 180 && !g_Menus[g_MpPlayerNum].curdialog
+                && g_Vars.currentplayer->prop && g_Vars.currentplayer->prop->chr) {
+            g_Vars.currentplayer->prop->chr->blurdrugamount = TICKS(3000);
+            blur_requested = true;
+            probeLog("PDX_ISSUE gameplay motion blur requested");
+        }
+        return;
     }
     if (scenario == 9 || scenario == 10) {
         if (scenario == 10 && !g_InCutscene && g_Vars.currentplayer->eyespy) {
@@ -305,9 +369,31 @@ void pdxIssueProbeTick(void)
                 probeLog("PDX_PAUSE cycles=%u resumes=%u mode=%d", pause_cycles, unpause_cycles, mode);
             }
         }
+        if (pause_cycles == 5 && !menu_probe_done && menu_probe_mib &&
+                sysGetMicroseconds() - pause_input_started > 52000000) {
+            menu_probe_done = true;
+            for (s32 mib = menu_probe_mib; mib > 0; --mib) {
+                size_t bytes = (size_t)mib * 1024u * 1024u;
+                void *block = MmAllocateContiguousMemory(bytes);
+                probeLog("PDX_MENU_MEMORY contiguous_bytes=%u success=%d stage_free=%u",
+                         (unsigned)bytes, block != NULL, mempGetStageFree());
+                if (block) {
+                    memset(block, 0x5a, bytes);
+                    MmFreeContiguousMemory(block);
+                    break;
+                }
+            }
+        }
         return;
     }
-    if ((!pdxIssueProbeInputEnabled() && ticks == 120)
+    if (scenario == 13 && menu_setup_tick && !captured && ticks >= menu_setup_tick + 120
+            && g_Menus[g_MpPlayerNum].curdialog
+            && g_Menus[g_MpPlayerNum].curdialog->definition == &g_MpPlayerStatsMenuDialog) {
+        captureCompletedFrame();
+        probeLog("PDX_ISSUE multiplayer stats dialog visible");
+    }
+    if ((!pdxIssueProbeInputEnabled() && scenario != 13 && ticks == 120)
+            || (scenario == 13 && !menu_setup_tick && ticks >= 600 && !g_InCutscene)
             // Let direct-stage startup and its initial file menus settle before
             // installing the specific dialog pair under test.
             || (pdxIssueProbeInputEnabled() && !menu_setup_tick && ticks >= 600 && !g_InCutscene)) {
@@ -352,6 +438,37 @@ void pdxIssueProbeTick(void)
             probeLog("PDX_ISSUE clip checks=4 complete");
         } else if (scenario == 1) {
             menuPushRootDialog(&g_CiControlOptionsMenuDialog, MENUROOT_MAINMENU);
+        } else if (scenario == 13) {
+            menu_setup_tick = ticks;
+            // Display-only statistics, kept in this private title process.
+            struct mpplayerconfig *player = &g_PlayerConfigsArray[g_MpPlayerNum];
+            player->distance = 1234;
+            player->accuracy = 875;
+            player->gamesplayed = 12;
+            player->damagedealt = 123450;
+            player->painreceived = 127;
+            unsigned failures = checkText("mp-distance", mpMenuTextDistance(NULL), "123.4km\n");
+            failures += checkText("mp-accuracy", mpMenuTextAccuracy(NULL), "87.5%");
+            const f32 damage[] = {12.7f, 1000, 12345, 123456, 1234567, 12345678};
+            const char *expected[] = {"12.7", "1000", "12.3K", "123K", "1.2M", "12M"};
+            char text[64];
+            for (unsigned i = 0; i < ARRAYCOUNT(damage); ++i) {
+                mpFormatDamageValue(text, damage[i]);
+                failures += checkText("mp-damage", text, expected[i]);
+            }
+            struct menuitem slider = {0};
+            union handlerdata data = {0};
+            data.slider.label = text;
+            player->handicap = 127;
+            slider.param = g_MpPlayerNum;
+            menuhandlerMpHandicapPlayer(MENUOP_GETSLIDERLABEL, &slider, &data);
+            failures += checkText("mp-handicap", text, "100%\n");
+            slider.param = PDMODEPROP_REACTION;
+            g_MissionConfig.pdmodereaction = 0;
+            menuhandlerPdModeSetting(MENUOP_GETSLIDERLABEL, &slider, &data);
+            failures += checkText("mission-slider", text, "100%\n");
+            probeLog("PDX_ISSUE multiplayer-text checks=10 failures=%u", failures);
+            menuPushRootDialog(&g_MpPlayerStatsMenuDialog, MENUROOT_MAINMENU);
         } else if (scenario == 8) {
             // Display-only mission-results fixture; no mission is completed or
             // saved. Use the original dialog and its repaired accuracy callback.
@@ -417,6 +534,8 @@ void pdxIssueProbeTick(void)
                      scenario, ticks, swipes);
         if (scenario == 3 && g_Vars.currentplayer->eyespy) {
             struct eyespy *spy = g_Vars.currentplayer->eyespy;
+            if (fatal_after_lens && ticks >= 1200 && spy->active && spy->deployed)
+                sysFatalError("Qualification: lens error display");
             probeLog("PDX_ISSUE eyespy active=%d deployed=%d held=%d startup=%d cutscene=%d",
                      spy->active, spy->deployed, spy->held, spy->startuptimer60, g_InCutscene);
         }

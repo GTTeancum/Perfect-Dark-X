@@ -566,3 +566,125 @@ hitch; neither that hitch nor the 30 FPS cap establishes sustained 30 FPS.
 v1.1.3 remains a draft. The actual published-v1.1.2 controller comparison and
 ordinary controller-driven menu path in the normal build still need the user;
 automated fixtures do not qualify physical controller operation or saving.
+
+## Retail Xbox audit and 720p headroom, November 21
+
+The subsequent audit used the retail 64 MiB CerBIOS Xbox with the distributed
+replacement texture pack installed. Native captures and per-run logs are under
+`.local/evidence/audit2-*`. The new renderer retains the existing texture cache,
+full-resolution output, framebuffer effects and game heap.
+
+- The renderer previously rejected previous-frame textures when they referenced
+  a completed surface without owning pixel storage. Texture selection, drawing,
+  filtering and coordinate scaling now resolve both storage forms. Deleting a
+  texture also invalidates its cached blur. The Chicago run exercised the live
+  prior-frame sampler and the game's motion-blur effect.
+- The streamed vertex buffer now uses 8,192 slots, saving 2,293,760 bytes
+  (2.1875 MiB). Reuse waits for both the command FIFO and graphics engine to
+  finish the previous draw. Texture replacement and reuse of blur storage
+  observe the same lifetime rule. Upload sizes are checked before shifting
+  on 32-bit Xbox, and clipping arithmetic handles signed endpoint overflow.
+- The GPU now copies the full-size immediate lens snapshot into the existing
+  HAL surface through pbkit's 2D blitter. HAL retains ownership. In 720p,
+  the qualification run compared all 921,600 pixels of the first GPU copy with
+  its source. The EyeSpy capture shows the room, scanlines and numeric HUD.
+- Between the first active/deployed EyeSpy log and the native screenshot,
+  eleven measurement windows had a median of 29.998 FPS and 25.685 ms of work
+  per frame. The slowest window was 29.206 FPS and the longest individual frame
+  was 47.603 ms. The previous renderer measured a median of 14.66 FPS across
+  four corresponding windows. The screenshot disk write introduces an additional
+  hitch and is outside these windows.
+- Air Base's scanner shows the frequency, zoom and compass heading during the
+  original intro. The Xbox formatter now carries rounded time across a minute
+  boundary and displays numeric weapon zoom, multiplayer statistics and slider
+  percentages. The scanner and debug compass normalize signed Xbox headings
+  before choosing a direction.
+- Frame-end kernel memory is sampled every frame and the running minimum is
+  reported every 60 frames. The Xbox test runner rejects failed statistics,
+  renderer allocation faults and silent replacement-texture fallback. It
+  retries unfinished native screenshot transfers within the original deadline.
+
+With 2 MiB deliberately allocated and retained, the 720p EyeSpy/pause run
+completed five ordinary menu entries and four resumes, reaching a minimum of
+440 additional free pages (1.72 MiB). In four-player stationary split-screen,
+the same reserve left at least 1,404 pages (5.48 MiB). All four views and HUDs
+were visible with four connected pad slots. The median across ten pre-capture
+timing windows after frame 240 was 29.998 FPS and 23.443 ms of work.
+The earlier capture with three disconnected-controller warnings is excluded.
+
+The five 8-second controller phases used the original menu sample queue in
+each case. All six native menu images were inspected for the expected dialog,
+translucency, foreground model and blurred room. The 720p run polls at about
+30 Hz and SD at about 60 Hz. A 25 ms press can fall between polls at 720p.
+The reporter specified rapid left/right movement without an exact cadence.
+
+| Video | Dialog | Swipes | While opening | Polls | Longest poll gap | Unexpected dialogs |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 720p | Control Options | 604 | 603 | 1200 | 52.666 ms | 0 |
+| 720p | Device Training | 679 | 679 | 1200 | 59.117 ms | 0 |
+| 720p | Holotraining | 604 | 604 | 1200 | 66.216 ms | 0 |
+| 480i 4:3 | Control Options | 918 | 918 | 2397 | 26.665 ms | 0 |
+| 480i 4:3 | Device Training | 918 | 918 | 2398 | 34.407 ms | 0 |
+| 480i 4:3 | Holotraining | 918 | 918 | 2398 | 31.490 ms | 0 |
+
+The initial 720p Control Options image transfer encountered an incomplete PPM.
+The completed native file was recovered from the same still-installed Xbox
+build after the watchdog returned to the launcher. The matching XBE, log and
+complete 1280x720 frame were verified. The original failed transfer report
+and recovery record are preserved under `audit2-controls`. The six captures
+were taken after timed input ended.
+
+The 720p allocation test was repeated after the numeric UI fixes. On the fifth
+EyeSpy pause, the kernel successfully allocated a single 4 MiB physical block.
+The fixture touched and freed it before the next frame. The final run
+(`audit2-final-ceiling`) reached 953 free pages (3.72 MiB) at frame end,
+settled at 1,070 pages (4.18 MiB) in the menu, and recovered to 1,874 pages
+(7.32 MiB) after the fourth resume. The earlier unreserved run measured 951
+pages (3.71 MiB) and also passed the 4 MiB allocation. The temporary allocation
+is deliberately between frame-end samples. Its size and success come from the
+allocator result, independently of the free-page counts.
+
+Frame-time headroom depends on the scene. During the three 720p timed menu
+runs, the median 60-frame window was 29.998 FPS in each run. The fifth-pause
+sequence includes a 208.130 ms frame before screenshot capture, near a resume
+with replacement-texture imports. Those transitions can visibly hitch. The
+measurements cover the tested locations and cannot establish a campaign-wide
+free-memory floor or a worst-case frame time.
+
+In SD, the first 2D blit matched all 307,200 source pixels and the completed
+EyeSpy capture shows the room, a guard and numeric HUD. At 720p the four
+offscreen clip cases completed, followed by an intact agent-selection screen.
+The SD widescreen firing-range result visibly reads 10.25s and 83.3%.
+Eleven training strings, the added minute rollover and three mission results
+passed in game. The 720p weapon zoom screenshot shows both 4.00X labels, the
+reticle and the normal zoom HUD.
+
+The multiplayer statistics page in `audit2-mp-stats-visible/native-068.png`
+shows 87.5% accuracy, 12.3K damage dealt, 12.7 pain received and 123.4km
+distance. Ten checks covered raw statistics, the damage suffix boundaries and
+two slider callbacks. The first multiplayer run passed those callbacks but
+captured agent selection. The accepted retry deferred setup until the original
+startup had settled and captured only while the statistics dialog was active.
+
+An intentional title-fatal test after the full-size lens borrow produced the
+expected readable HAL error display at 720p. The log contains the successful
+blit comparison and the exact induced error. The capture reports the HAL
+debug surface active and the watchdog returned to the launcher. The runner
+correctly classified this deliberate negative test as a fault. Normal gameplay
+runs were checked independently.
+
+The final normal XBE is SHA-256
+`60f5cbe11d127dcab47bd179514d58b0dc4d61c1994515301c3bf826d4fded3e`.
+Its native 720p startup capture shows the textured rooftop intro from two
+identical stopped-title reads. Input fixtures, reserve and free-page probes are
+excluded from that image. The ceiling run used qualification XBE
+`9d10c2f3fc47414f29adc20eaa5249b625aadf8041ec6ff628d43febac8fa7ff`.
+The final qualification XBE
+`dd928efee296ffab9d2cd72937d1cd108a2db2649226c720f2e60a839a2a46e3`
+changes only the multiplayer statistics fixture setup and capture timing
+relative to that binary's source. Each run records its deployed XBE hash.
+
+The normal image was restored to the owned test folder. The public release
+remains v1.1.2. The controller-driven comparison with the original v1.1.2
+binary, audible output, saving and a full-campaign soak remain unverified
+in this audit.

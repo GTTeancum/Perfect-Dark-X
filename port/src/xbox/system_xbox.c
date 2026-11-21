@@ -11,6 +11,8 @@
 // mkdir for directory creation (pdclib may not have it; use XboxCreateDirectory stub if needed)
 static inline void xboxMkdir(const char *path) { (void)path; }
 #include <hal/debug.h>
+#include <hal/video.h>
+#include <pbkit/pbkit.h>
 #include <SDL.h>
 
 #include <PR/ultratypes.h>
@@ -201,9 +203,12 @@ void sysFatalError(const char *fmt, ...)
 
     sysLogPrintf(LOG_ERROR, "FATAL: %s", msg);
 
-    // Display on screen via debugPrint (pbkit must already be initialised)
+    // pbkit normally scans its own buffers. Show the HAL text surface and
+    // keep queued VBlank swaps from replacing the error message.
     debugClearScreen();
     debugPrint("FATAL ERROR:\n%s\n\nPress power to reboot.\n", msg);
+
+    if (XVideoGetFB()) pb_show_debug_screen();
 
     // Spin forever — let the user read the message
     for (;;) {}

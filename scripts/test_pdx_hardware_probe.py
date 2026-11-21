@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pdx_hardware_probe as probe
 
@@ -57,6 +57,19 @@ class OfflineXbox:
 
 
 class HardwareRunnerTests(unittest.TestCase):
+    def test_memory_floor_includes_intermediate_low_and_older_samples(self):
+        log = (b'PDX_MEMORY status=00000000 available_pages=640 frame=60\n'
+               b'PDX_MEMORY status=00000000 available_pages=650 frame=120 low_pages=400\r\n'
+               b'PDX_MEMORY status=c0000001 available_pages=0 frame=180 low_pages=0\n')
+        self.assertEqual(probe.minimum_free_pages(log), 400)
+        self.assertEqual(probe.minimum_free_pages(log.splitlines()[0]), 640)
+        self.assertIsNone(probe.minimum_free_pages(b''))
+        self.assertTrue(probe.RUNTIME_FAULT.search(log))
+        self.assertFalse(probe.RUNTIME_FAULT.search(log.splitlines()[1]))
+
+    def test_texture_allocation_fallback_fails_qualification(self):
+        self.assertTrue(probe.RUNTIME_FAULT.search(b'falling back to stock texture'))
+
     def test_native_capture_resumes_title_when_read_fails(self):
         commands = []
         class CaptureXbox:
@@ -67,6 +80,46 @@ class HardwareRunnerTests(unittest.TestCase):
             with probe.stopped_title(CaptureXbox()):
                 raise EOFError('capture read failed')
         self.assertEqual(commands, ['stop', 'go'])
+
+    def test_game_capture_retries_a_partial_ppm_and_saves_the_complete_frame(self):
+        header = b'P6\n4 2\n255\n'
+        pixels = bytes(range(24))
+        reads = iter((header + pixels[:3], header + pixels))
+        class WritingXbox(OfflineXbox):
+            def get(self, remote):
+                if remote.endswith('.ppm'):
+                    return next(reads)
+                if remote.endswith('pd.log'):
+                    return b'PDX_CAPTURE written=1'
+                return super().get(remote)
+
+            def command(self, command):
+                return '200- OK'
+
+        root = Path(__file__).resolve().parents[1]
+        clock = Mock()
+        clock.monotonic.return_value = 0
+        def advance(seconds):
+            clock.monotonic.return_value += seconds
+        clock.sleep.side_effect = advance
+        (root / '.local/tmp').mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root / '.local/tmp') as directory:
+            workspace = Path(directory)
+            (workspace / '.local/evidence').mkdir(parents=True)
+            (workspace / 'default.xbe').write_bytes(b'xbe')
+            (workspace / 'boot.ini').write_text('[Game]\nIssueProbe=5\n')
+            argv = ['probe', '--name', 'retry', '--xbe', str(workspace / 'default.xbe'),
+                    '--boot-ini', str(workspace / 'boot.ini'), '--seconds', '10',
+                    '--capture-at', '1', '--game-capture', '--require', 'PDX_CAPTURE written=1']
+            with patch.object(probe, 'ROOT', workspace), patch.object(probe, 'Xbdm', WritingXbox), \
+                    patch.object(probe, 'time', clock), patch.object(probe, 'target_config', lambda: {}), \
+                    patch.object(probe, 'deployment_path', lambda path: path), patch.object(sys, 'argv', argv):
+                self.assertEqual(probe.main(), 0)
+            evidence = workspace / '.local/evidence/retry'
+            self.assertEqual([p.read_bytes() for p in evidence.glob('*.ppm')], [header + pixels])
+            report = json.loads((evidence / 'run.json').read_text())
+            self.assertEqual(len(report['captures']), 1)
+            self.assertEqual(report['events'][0]['operation'], 'capture')
 
     def test_failed_deadline_reboot_is_recorded_before_report(self):
         root = Path(__file__).resolve().parents[1]

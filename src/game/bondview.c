@@ -2638,8 +2638,17 @@ Gfx *bviewDrawHorizonScanner(Gfx *gdl)
 	gdl = text0f153838(gdl);
 
 	// Prepare text buffers
-	sprintf(directiontext, "%s %s:%03d", arrows, &directions[(turnangle + 22) / 45], turnangle);
+#ifdef PLATFORM_XBOX
+	// libc atan2f returns signed angles; the original game uses one full turn.
+	if (turnangle < 0) turnangle += 360;
+#endif
+	sprintf(directiontext, "%s %s:%03d", arrows, directions[(turnangle + 22) / 45], turnangle);
+#ifdef PLATFORM_XBOX
+	s32 hertz100 = (s32)((menuGetCosOscFrac(4) * 4.6f + 917.4f) * 100.0f + 0.5f);
+	sprintf(hertztext, "%s %d.%02dh", arrows, hertz100 / 100, hertz100 % 100);
+#else
 	sprintf(hertztext, "%s %s%s%4.2fh", arrows, "", "", menuGetCosOscFrac(4) * 4.6f + 917.4f);
+#endif
 
 	fovy = viGetFovY();
 
@@ -2649,7 +2658,12 @@ Gfx *bviewDrawHorizonScanner(Gfx *gdl)
 		fovy = ADJUST_ZOOM_FOV(60.0f) / fovy;
 	}
 
+#ifdef PLATFORM_XBOX
+	s32 zoom100 = (s32)(fovy * 100.0f + 0.5f);
+	sprintf(zoomtext, "%s %d.%02dX", arrows, zoom100 / 100, zoom100 % 100);
+#else
 	sprintf(zoomtext, "%s %s%s%4.2fX", arrows, "", "", fovy);
+#endif
 
 	gdl = text0f153628(gdl);
 

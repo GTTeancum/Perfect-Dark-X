@@ -118,6 +118,19 @@ static inline uint32_t f2u(float f)
 static inline void nv2a_copy_pixels(uint32_t *dst, const uint32_t *src,
                                     uint32_t count)
 {
+    // Prefer cache-line reads for aligned copies from write-combined video RAM.
+    if (!(((uintptr_t)src | (uintptr_t)dst) & 15u)) {
+        while (count >= 16) {
+            __asm__ volatile ("movaps 0(%0), %%xmm0; movaps 16(%0), %%xmm1;"
+                              "movaps 32(%0), %%xmm2; movaps 48(%0), %%xmm3;"
+                              "movntps %%xmm0, 0(%1); movntps %%xmm1, 16(%1);"
+                              "movntps %%xmm2, 32(%1); movntps %%xmm3, 48(%1)"
+                              : : "r"(src), "r"(dst) : "xmm0","xmm1","xmm2","xmm3","memory");
+            src += 16;
+            dst += 16;
+            count -= 16;
+        }
+    }
     // pdclib's generic memcpy is byte-oriented. Xbox is always i686 and every
     // framebuffer row is DWORD aligned, so use the CPU's native bulk copy.
     __asm__ volatile ("rep movsl"
@@ -177,7 +190,7 @@ static inline uint32_t nv2a_texture_pitch(const NV2ATexture &texture)
 
 static NV2ATexture g_textures[MAX_TEXTURES];
 // HAL retains a full-size boot/error framebuffer after pbkit starts scanning
-// its own surfaces. One CPU-written lens snapshot can borrow that allocation.
+// its own surfaces. One lens snapshot can borrow that allocation.
 // HAL keeps ownership; it is never freed here or used as a GPU render target.
 static NV2ATexture *g_hal_snapshot_owner = nullptr;
 
@@ -221,7 +234,9 @@ struct NV2AStreamVertex {
     float tex1[2];
 };
 
-#define NV2A_STREAM_VERTEX_CAPACITY 65536u
+// Frames drain before reuse. Larger scenes can wrap mid-frame after a FIFO drain.
+#define NV2A_STREAM_VERTEX_CAPACITY 8192u
+static void nv2a_wait_for_gpu(void);
 static NV2AStreamVertex *g_stream_vertices = nullptr;
 static uint32_t g_stream_vertex_cursor = 0;
 static bool g_stream_attributes_bound = false;
@@ -927,7 +942,7 @@ static void nv2a_select_texture(int tile, uint32_t texture_id, bool linear_filte
     g_last_selected_tile = tile;
 
     if (texture_id == 0 || texture_id >= MAX_TEXTURES ||
-        !g_textures[texture_id].used || !g_textures[texture_id].vram) {
+        !g_textures[texture_id].used || !nv2a_texture_data(g_textures[texture_id])) {
         nv2a_disable_texture(tile);
         return;
     }
@@ -978,8 +993,8 @@ static void nv2a_upload_texture(const uint8_t *rgba32_buf,
                      swizzled ? 1u : 0u);
     }
 
-    // Free old allocation if size changed
     if (t.vram) {
+        nv2a_wait_for_gpu();
         nv2a_release_owned_pixels(t);
     }
 
@@ -1096,7 +1111,7 @@ static void nv2a_prepare_textures_for_draw(void)
 
         const int texture_id = g_active_texture[tile];
         if (texture_id <= 0 || texture_id >= MAX_TEXTURES ||
-            !g_textures[texture_id].used || !g_textures[texture_id].vram) {
+            !g_textures[texture_id].used || !nv2a_texture_data(g_textures[texture_id])) {
             continue;
         }
 
@@ -1106,6 +1121,14 @@ static void nv2a_prepare_textures_for_draw(void)
             if (blurred) draw_texture = blurred;
         }
         nv2a_bind_texture(tile, *draw_texture);
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+        static bool reported_alias = false;
+        if (!reported_alias && draw_texture->alias_vram && !draw_texture->vram &&
+                g_hw_texture[tile].enabled) {
+            sysLogPrintf(LOG_NOTE, "PDX_ALIAS sampled previous frame %ux%u", draw_texture->width, draw_texture->height);
+            reported_alias = true;
+        }
+#endif
         g_draw_texture_id[tile] = texture_id;
         g_draw_texture_external[tile] = draw_texture->external;
         g_draw_texture_external_id[tile] = draw_texture->external_id;
@@ -1761,7 +1784,7 @@ static void nv2a_scale_linear_texcoord(int tile, float &s, float &t,
     const int texture_id = g_active_texture[tile];
 
     if (texture_id <= 0 || texture_id >= MAX_TEXTURES ||
-        !g_textures[texture_id].used || !g_textures[texture_id].vram) {
+        !g_textures[texture_id].used || !nv2a_texture_data(g_textures[texture_id])) {
         return;
     }
 
@@ -1841,8 +1864,10 @@ static void nv2a_delete_texture(uint32_t texID)
     }
     NV2ATexture &t = g_textures[texID];
     if (t.vram) {
+        nv2a_wait_for_gpu();
         nv2a_release_owned_pixels(t);
     }
+    if (g_blur_source_id == (int)texID) g_blur_source_id = -1;
     t = {};
 }
 
@@ -1934,13 +1959,15 @@ static void nv2a_set_scissor(int x, int y, int w, int h)
     g_rs.sc_w = w;
     g_rs.sc_h = h;
 
+    const int64_t x_end = (int64_t)x + w;
+    const int64_t top = (int64_t)g_target_height - y - h;
     int x0 = x < 0 ? 0 : x;
     if (x0 > (int)g_target_width) x0 = (int)g_target_width;
-    int x1 = x + w;
+    int64_t x1 = x_end;
     if (x1 < x0) x1 = x0;
     if (x1 > (int)g_target_width) x1 = (int)g_target_width;
-    int y0 = (int)g_target_height - (y + h);
-    int y1 = (int)g_target_height - y;
+    int64_t y0 = top;
+    int64_t y1 = (int64_t)g_target_height - y;
     if (y0 < 0) y0 = 0;
     if (y0 > (int)g_target_height) y0 = (int)g_target_height;
     if (y1 < y0) y1 = y0;
@@ -1948,7 +1975,7 @@ static void nv2a_set_scissor(int x, int y, int w, int h)
     g_scissor_empty = x1 <= x0 || y1 <= y0;
 
 #ifdef PD_XBOX_QUALIFICATION_CONFIG
-    if (x > (int)g_target_width || (int)g_target_height - (y + h) > (int)g_target_height) {
+    if (x > (int)g_target_width || top > (int)g_target_height) {
         static unsigned corrected = 0;
         if (++corrected <= 4 || corrected % 128 == 0) {
             sysLogPrintf(LOG_NOTE, "NV2A PERF scissor corrected=%u input=%d,%d,%d,%d target=%ux%u packed=%08x,%08x",
@@ -2588,7 +2615,7 @@ static void nv2a_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         if (NV2A_STREAM_VERTEX_CAPACITY - g_stream_vertex_cursor < 21u) {
             submit_stream_range(batch_first, batch_count);
             batch_count = 0;
-            pb_wait_until_gr_not_busy();
+            nv2a_wait_for_gpu();
             g_stream_vertex_cursor = 0;
             batch_first = 0;
         }
@@ -3227,12 +3254,14 @@ static void nv2a_finish_render(void)
 #endif
     const ULONGLONG gpu_complete = KeQueryPerformanceCounter();
 #ifdef PD_XBOX_QUALIFICATION_CONFIG
-    if (g_frame_count % 60u == 0) {
-        MM_STATISTICS memory = {};
-        memory.Length = sizeof(memory);
-        const NTSTATUS memory_result = MmQueryStatistics(&memory);
-        sysLogPrintf(LOG_NOTE, "PDX_MEMORY status=%08lx available_pages=%lu frame=%u",
-                     (unsigned long)memory_result, (unsigned long)memory.AvailablePages, g_frame_count);
+    static uint32_t low_pages = UINT32_MAX;
+    MM_STATISTICS memory = {};
+    memory.Length = sizeof(memory);
+    const NTSTATUS memory_result = MmQueryStatistics(&memory);
+    if (memory_result == 0 && memory.AvailablePages < low_pages) low_pages = memory.AvailablePages;
+    if (g_frame_count % 60u == 0 || memory_result != 0) {
+        sysLogPrintf(LOG_NOTE, "PDX_MEMORY status=%08lx available_pages=%lu frame=%u low_pages=%u",
+                     (unsigned long)memory_result, (unsigned long)memory.AvailablePages, g_frame_count, low_pages);
     }
 #endif
 #if defined(PD_XBOX_PRESENT_TRACE)
@@ -3468,7 +3497,10 @@ static NV2ATexture *nv2a_framebuffer_texture(int fb_id)
 
 static void nv2a_wait_for_gpu(void)
 {
-    pb_wait_until_gr_not_busy();
+    // PGRAPH can be idle while a submitted draw is still waiting in the FIFO.
+    while (pb_busy()) {
+        pb_wait_until_gr_not_busy();
+    }
 }
 
 extern "C" void gfx_xbox_discard_framebuffer(int fb_id)
@@ -3502,15 +3534,15 @@ static void nv2a_store_active_framebuffer(void)
     memset(g_hw_texture, 0, sizeof(g_hw_texture));
 }
 
-static void nv2a_ensure_framebuffer_storage(NV2ATexture &texture, bool cpu_snapshot = false)
+static void nv2a_ensure_framebuffer_storage(NV2ATexture &texture, bool lens_snapshot = false)
 {
-    if (!cpu_snapshot && g_hal_snapshot_owner == &texture) {
+    if (!lens_snapshot && g_hal_snapshot_owner == &texture) {
         nv2a_wait_for_gpu();
         nv2a_release_owned_pixels(texture);
     }
     if (texture.vram) return;
     const uint32_t bytes = texture.pitch * texture.height;
-    if (cpu_snapshot && !g_hal_snapshot_owner) {
+    if (lens_snapshot && !g_hal_snapshot_owner) {
         uint32_t *hal = (uint32_t *)XVideoGetFB();
         const VIDEO_MODE mode = XVideoGetMode();
         const uint32_t physical = (uint32_t)(uintptr_t)hal & 0x03ffffffu;
@@ -3735,6 +3767,9 @@ static NV2ATexture *nv2a_prepare_blur_texture(int source_id)
     const uint32_t height = (source.height + 3u) / 4u;
     const uint32_t pitch = (width * 4u + 63u) & ~63u;
     const uint32_t bytes = pitch * height;
+    // Either side may still be in use: an earlier draw can sample the old
+    // blur even if the new source is a completed front-buffer alias.
+    if (g_blur_texture.vram || !source.alias_vram) nv2a_wait_for_gpu();
     if (g_blur_texture.vram &&
         (g_blur_texture.width != width ||
          g_blur_texture.height != height ||
@@ -3752,13 +3787,6 @@ static NV2ATexture *nv2a_prepare_blur_texture(int source_id)
         }
     }
 
-    // A previous-frame alias points at the completed front surface and is
-    // immutable for this frame, so reading it does not require draining the
-    // current back-buffer command stream. Owned textures may still have been
-    // written by the GPU and retain the conservative synchronization.
-    if (!source.alias_vram) {
-        nv2a_wait_for_gpu();
-    }
     const uint8_t *src = (const uint8_t *)nv2a_texture_data(source);
     const uint32_t source_pitch = nv2a_texture_pitch(source);
     uint8_t *dst = (uint8_t *)g_blur_texture.vram;
@@ -3875,6 +3903,41 @@ static void nv2a_copy_framebuffer(int fb_dst, int fb_src,
     const bool box_filter = scaled &&
         (src_width >= dst_width * 4u || src_height >= dst_height * 4u);
 
+    // Copy the immediate full-size lens image with pbkit's 2D blitter. The
+    // source must be the current completed color surface; HAL remains owner
+    // of the destination. No render target or scanout state changes.
+    if (g_hal_snapshot_owner == dst_texture && fb_src == FB_BACK_BUFFER && use_back &&
+        src_left == 0 && src_top == 0 && src_width == dst_width && src_height == dst_height) {
+        constexpr uint32_t full_ram_dma = 3;
+        constexpr uint32_t pbkit_blit_destination = 11;
+        constexpr uint32_t a8r8g8b8 = 0x0a;
+        constexpr uint32_t source_copy = 3;
+        uint32_t *p = pb_begin();
+        p = pb_push2_to(SUBCH_4, p, NV10_CONTEXT_SURFACES_2D_SET_DMA_IN_MEMORY0, full_ram_dma, full_ram_dma);
+        p = pb_push4_to(SUBCH_4, p, NV10_CONTEXT_SURFACES_2D_FORMAT, a8r8g8b8,
+            (dst_texture->pitch << 16) | src_pitch,
+            (uintptr_t)src_base & NV2A_TEXTURE_PHYSICAL_MASK, (uintptr_t)dst_base & NV2A_TEXTURE_PHYSICAL_MASK);
+        p = pb_push1_to(SUBCH_3, p, NV_IMAGE_BLIT_OPERATION, source_copy);
+        p = pb_push3_to(SUBCH_3, p, NV_IMAGE_BLIT_POINT_IN, 0, 0, (dst_height << 16) | dst_width);
+        p = pb_push1_to(SUBCH_4, p, NV10_CONTEXT_SURFACES_2D_SET_DMA_IN_MEMORY1, pbkit_blit_destination);
+        pb_end(p);
+        nv2a_wait_for_gpu();
+#ifdef PD_XBOX_QUALIFICATION_CONFIG
+        static bool verified = false;
+        if (!verified) {
+            for (uint32_t y = 0; y < dst_height; ++y) {
+                if (memcmp(src_base + y * src_pitch, dst_base + y * dst_texture->pitch, dst_width * 4u))
+                    sysFatalError("Lens blit pixel mismatch on row %u", y);
+            }
+            sysLogPrintf(LOG_NOTE, "PDX_BLIT verified pixels=%u", dst_width * dst_height);
+            verified = true;
+        }
+#endif
+        ++dst_texture->content_version;
+        ++g_dbg_fb_copy_fast;
+        return;
+    }
+
     // Previous-frame and menu captures are commonly 1:1. Copy complete rows
     // rather than doing two integer divisions for every pixel.
     if (scaled && src_width == dst_width && src_height == dst_height) {
@@ -3884,6 +3947,7 @@ static void nv2a_copy_framebuffer(int fb_dst, int fb_src,
                 (uint32_t *)(dst_base + y * dst_texture->pitch),
                 (const uint32_t *)(src_base + y * src_pitch), dst_width);
         }
+        __asm__ volatile ("sfence" ::: "memory");
         ++dst_texture->content_version;
         return;
     }
@@ -3898,6 +3962,7 @@ static void nv2a_copy_framebuffer(int fb_dst, int fb_src,
                     ((uint32_t)src_top + y) * src_pitch) + src_left,
                 dst_width);
         }
+        __asm__ volatile ("sfence" ::: "memory");
         ++dst_texture->content_version;
         return;
     }
@@ -3998,7 +4063,11 @@ static void nv2a_select_texture_fb(int fb_id)
         return;
     }
     NV2ATexture *texture = nv2a_framebuffer_texture(fb_id);
-    if (!texture || !nv2a_texture_data(*texture)) return;
+    if (!texture || !nv2a_texture_data(*texture)) {
+        g_active_texture[0] = -1;
+        nv2a_disable_texture(0);
+        return;
+    }
     g_active_texture[0] = (int)g_framebuffers[fb_id].texture_id;
     g_last_selected_tile = 0;
     texture->linear_filter = true;
@@ -4012,7 +4081,7 @@ static void nv2a_set_texture_filter(enum FilteringMode mode)
     g_filter_mode = mode;
     for (int tile = 0; tile < TEXTURE_TILE_COUNT; ++tile) {
         const int id = g_active_texture[tile];
-        if (id > 0 && id < MAX_TEXTURES && g_textures[id].vram) {
+        if (id > 0 && id < MAX_TEXTURES && nv2a_texture_data(g_textures[id])) {
             nv2a_bind_texture(tile, g_textures[id]);
         }
     }

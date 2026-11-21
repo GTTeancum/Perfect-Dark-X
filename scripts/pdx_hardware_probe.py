@@ -3,6 +3,7 @@
 import argparse
 from contextlib import contextmanager, nullcontext
 import hashlib
+from io import BytesIO
 import json
 import re
 import struct
@@ -11,6 +12,21 @@ import threading
 import time
 sys.dont_write_bytecode = True
 from pdx_xbdm import ROOT, Xbdm, target_config, deployment_path, local_path, quoted
+
+
+RUNTIME_FAULT = re.compile(
+    rb'FATAL|GPU Error|NV2A TIMEOUT|GPU TIMEOUT|ASSERTION FAILED|'
+    rb'MmAllocateContiguousMemory failed|blur texture allocation failed|'
+    rb'falling back to stock texture|PDX_MEMORY status=(?!00000000)[0-9a-fA-F]{8}'
+)
+
+
+def minimum_free_pages(log):
+    # Older binaries report periodic samples. Newer binaries also record the
+    # lowest frame between samples, which can fall below both endpoints.
+    pages = [int(n) for n in re.findall(rb'PDX_MEMORY status=00000000 available_pages=(\d+)', log)]
+    pages.extend(int(n) for n in re.findall(rb'PDX_MEMORY status=00000000 [^\r\n]* low_pages=(\d+)', log))
+    return min(pages, default=None)
 
 
 @contextmanager
@@ -103,7 +119,7 @@ def main():
         with Xbdm(target) as client:
             try:
                 report['launch'] = client.command('magicboot title=' + quoted(deployment_path('default.xbe')) + ' debug')
-            except EOFError as exc:
+            except (EOFError, ConnectionResetError) as exc:
                 report['launch'] = str(exc)
         print('Launch:', report['launch'], flush=True)
         while time.monotonic() - started < args.seconds - 2 and not rebooted.is_set():
@@ -113,7 +129,7 @@ def main():
                 with Xbdm(target, timeout=5) as client:
                     log = client.get(deployment_path('pd.log'))
                 (output / 'pd.log').write_bytes(log)
-                if b'FATAL' in log:
+                if b'FATAL' in log and not (args.hal_capture and pending):
                     print('Fatal log marker; ending the run and returning to launcher', flush=True)
                     break
                 markers = [l for l in log.decode(errors='replace').splitlines()
@@ -128,7 +144,6 @@ def main():
             try:
                 # A failed log transfer must not prevent a native error capture.
                 if pending and elapsed >= pending[0] and not rebooted.is_set():
-                    pending.pop(0)
                     path = output / f'native-{int(elapsed):03d}.png'
                     with Xbdm(target, timeout=10) as client:
                         if args.hal_capture or args.framebuffer_capture:
@@ -171,13 +186,15 @@ def main():
                         elif args.game_capture:
                             from PIL import Image
                             native = client.get(deployment_path('pdx-qa-frame.ppm'))
-                            ppm = path.with_suffix('.ppm')
-                            ppm.write_bytes(native)
-                            with Image.open(ppm) as frame:
+                            # XBDM may first see the PPM while the title is still writing it.
+                            with Image.open(BytesIO(native)) as frame:
+                                frame.load()
                                 meta = {'width': frame.width, 'height': frame.height, 'source': 'game completed framebuffer'}
                                 frame.save(path)
+                            path.with_suffix('.ppm').write_bytes(native)
                         else:
                             meta = client.screenshot(path)
+                    pending.pop(0)
                     report['captures'].append({'elapsed': elapsed, 'path': str(path), 'metadata': meta})
                     print('Native screenshot:', path, flush=True)
             except Exception as exc:
@@ -192,10 +209,10 @@ def main():
         watchdog.join(timeout=18)
         report['elapsed'] = time.monotonic() - started
         report['missing_markers'] = [m for m in args.require if m.encode() not in log]
-        pages = [int(n) for n in re.findall(rb'PDX_MEMORY status=00000000 available_pages=(\d+)', log)]
-        report['minimum_free_pages'] = min(pages) if pages else None
-        report['memory_ok'] = not args.min_free_pages or bool(pages and min(pages) >= args.min_free_pages)
-        report['fault'] = (bool(re.search(rb'FATAL|GPU Error|NV2A TIMEOUT|GPU TIMEOUT|ASSERTION FAILED', log))
+        floor = minimum_free_pages(log)
+        report['minimum_free_pages'] = floor
+        report['memory_ok'] = not args.min_free_pages or (floor is not None and floor >= args.min_free_pages)
+        report['fault'] = (bool(RUNTIME_FAULT.search(log))
                            or any(c['metadata'].get('gpu_debug_screen_active') for c in report['captures']))
         report['execution_ok'] = (bool(log) and not report['missing_markers'] and not report['fault'] and report['memory_ok']
                                   and not pending and len(report['captures']) == len(args.capture_at)

@@ -29,10 +29,14 @@
 #define NUM_BIO_LOCATIONS 14
 
 #ifdef PLATFORM_XBOX
-/* nxdk's pdclib omits %f values. These short training
- * times only need hundredths; keep the sign separate for aborted attempts. */
+/* Display sub-minute attempts to hundredths and longer attempts to the next second. */
 static void trainingFormatSeconds(char *dst, f32 seconds)
 {
+	if (seconds >= 60.0f) {
+		s32 whole = (s32)ceilf(seconds);
+		sprintf(dst, "%dm %2ds\n", whole / 60, whole % 60);
+		return;
+	}
 	s32 hundredths = (s32)(fabsf(seconds) * 100.0f + 0.5f);
 	sprintf(dst, "%s%d.%02ds\n", seconds < 0 ? "-" : "",
 			hundredths / 100, hundredths % 100);
@@ -384,6 +388,9 @@ char *frMenuTextTimeTakenValue(struct menuitem *item)
 		secs = frdata->timelimit;
 	}
 
+#ifdef PLATFORM_XBOX
+	trainingFormatSeconds(g_StringPointer, secs);
+#else
 	if (secs >= 60.0f) {
 		s32 mins = 0;
 
@@ -393,14 +400,10 @@ char *frMenuTextTimeTakenValue(struct menuitem *item)
 		}
 
 		sprintf(g_StringPointer, "%dm %2ds\n", mins, (s32)ceilf(secs));
-		return g_StringPointer;
 	} else {
-#ifdef PLATFORM_XBOX
-		trainingFormatSeconds(g_StringPointer, secs);
-#else
 		sprintf(g_StringPointer, "%s%s%2.2fs\n", "", "", secs);
-#endif
 	}
+#endif
 
 	return g_StringPointer;
 }
@@ -2073,6 +2076,9 @@ char *dtMenuTextTimeTakenValue(struct menuitem *item)
 	struct trainingdata *data = dtGetData();
 	f32 secs = data->timetaken / (PAL ? 50.0f : 60.0f);
 
+#ifdef PLATFORM_XBOX
+	trainingFormatSeconds(g_StringPointer, secs);
+#else
 	if (secs >= 60.0f) {
 		s32 mins = 0;
 
@@ -2082,14 +2088,10 @@ char *dtMenuTextTimeTakenValue(struct menuitem *item)
 		}
 
 		sprintf(g_StringPointer, "%dm %2ds\n", mins, (s32)ceilf(secs));
-		return g_StringPointer;
 	} else {
-#ifdef PLATFORM_XBOX
-		trainingFormatSeconds(g_StringPointer, secs);
-#else
 		sprintf(g_StringPointer, "%s%s%2.2fs\n", "", "", secs);
-#endif
 	}
+#endif
 
 	return g_StringPointer;
 }
@@ -2195,6 +2197,9 @@ char *htMenuTextTimeTakenValue(struct menuitem *item)
 	struct trainingdata *data = getHoloTrainingData();
 	f32 secs = data->timetaken / (PAL ? 50.0f : 60.0f);
 
+#ifdef PLATFORM_XBOX
+	trainingFormatSeconds(g_StringPointer, secs);
+#else
 	if (secs >= 60.0f) {
 		s32 mins = 0;
 
@@ -2204,14 +2209,10 @@ char *htMenuTextTimeTakenValue(struct menuitem *item)
 		}
 
 		sprintf(g_StringPointer, "%dm %2ds\n", mins, (s32)ceilf(secs));
-		return g_StringPointer;
 	} else {
-#ifdef PLATFORM_XBOX
-		trainingFormatSeconds(g_StringPointer, secs);
-#else
 		sprintf(g_StringPointer, "%s%s%2.2fs\n", "", "", secs);
-#endif
 	}
+#endif
 
 	return g_StringPointer;
 }

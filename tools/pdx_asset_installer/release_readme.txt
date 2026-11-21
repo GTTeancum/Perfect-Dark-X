@@ -1,19 +1,17 @@
-PERFECT DARK X v1.1.3 - FULL RELEASE
+PERFECT DARK X v1.1.3 - CANDIDATE
 
-This normal release fixes SD Spy Cam corruption, rapid-menu GPU crashes,
-and missing training statistics (issues #4, #5, and #6). EyeSpy speed/height
-and mission-end accuracy formatting are also repaired. Menu input speed is
-unchanged; no input throttle or extra GPU flush is added. Normal presentation
-safeguards remain enabled, qualification input/tracing is disabled, and
-standard pd.log output remains available. Version 1.1.3 appears on startup.
+This build repairs Spy Cam rendering, rapid-menu GPU crashes and missing
+training statistics (issues #4, #5 and #6). The blurred menu background and
+framebuffer effects are enabled in SD and 720p. EyeSpy, Horizon Scanner and
+mission-end numeric readouts have also been repaired. The game uses its
+normal controller handling and presentation safeguards. Qualification input
+and memory probes are excluded from this executable.
 
-KNOWN LIMITATION
+HARDWARE VERIFICATION
 
-Some SD menu backgrounds remain black in hardware test fixtures even when
-the foreground model is visible. This background-compositing defect remains
-unresolved. Targeted XEMU and retail 64 MiB Xbox checks do not constitute
-complete visual, audio, controller, save-persistence, or campaign testing.
-See docs/open-issue-repairs.md in the source repository for the test report.
+The candidate has been tested on a retail 64 MiB CerBIOS Xbox with the
+replacement texture pack. The test report in docs/open-issue-repairs.md
+records the scenes, memory measurements and outstanding controller comparison.
 
 COMPLETE DISTRIBUTION
 

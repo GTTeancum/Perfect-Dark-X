@@ -872,7 +872,11 @@ MenuItemHandlerResult menuhandlerPdModeSetting(s32 operation, struct menuitem *i
 		if (item->param == 0) {
 			fvalue = fvalue * 4 + 1.0f;
 		}
+#ifdef PLATFORM_XBOX
+		sprintf(data->slider.label, "%u%%\n", (u32)(fvalue * 100.0f + 0.5f));
+#else
 		sprintf(data->slider.label, "%s%s%.00f%%\n", "", "", fvalue * 100.0f);
+#endif
 		break;
 	}
 

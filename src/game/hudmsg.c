@@ -205,6 +205,16 @@ Gfx *hudmsgRenderMissionTimer(Gfx *gdl, u32 alpha)
 	return gdl;
 }
 
+static void hudmsgFormatZoom(char *dst, f32 zoom)
+{
+#ifdef PLATFORM_XBOX
+	u32 hundredths = (u32)(fabsf(zoom) * 100.0f + 0.5f);
+	sprintf(dst, "%s%u.%02uX", zoom < 0.0f ? "-" : "", hundredths / 100, hundredths % 100);
+#else
+	sprintf(dst, "%s%s%4.2fX", "", "", zoom);
+#endif
+}
+
 Gfx *hudmsgRenderZoomRange(Gfx *gdl, u32 alpha)
 {
 	s32 viewtop;
@@ -274,7 +284,7 @@ Gfx *hudmsgRenderZoomRange(Gfx *gdl, u32 alpha)
 		curzoom = maxzoom - 1.0f / (zoomfov / zoominfovy) + 1;
 	}
 
-	sprintf(text, "%s%s%4.2fX", "", "", curzoom);
+	hudmsgFormatZoom(text, curzoom);
 	textMeasure(&textheight, &textwidth, text, g_CharsNumeric, g_FontNumeric, 0);
 
 	x = viewleft + viewhalfwidth - textwidth - 5;
@@ -304,7 +314,7 @@ Gfx *hudmsgRenderZoomRange(Gfx *gdl, u32 alpha)
 	gdl = textRender(gdl, &x, &y, text, g_CharsNumeric, g_FontNumeric, colour, 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
 
 	// Right side - max zoom level
-	sprintf(text, "%s%s%4.2fX", "", "", maxzoom);
+	hudmsgFormatZoom(text, maxzoom);
 	textMeasure(&textheight, &textwidth, text, g_CharsNumeric, g_FontNumeric, 0);
 
 	x = viewleft + viewhalfwidth + 5;

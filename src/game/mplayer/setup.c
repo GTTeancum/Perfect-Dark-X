@@ -879,7 +879,12 @@ char *mpMenuTextAmmoUsed(struct menuitem *item)
 
 char *mpMenuTextDistance(struct menuitem *item)
 {
+#ifdef PLATFORM_XBOX
+	u32 tenths = g_PlayerConfigsArray[g_MpPlayerNum].distance;
+	sprintf(g_StringPointer, "%u.%ukm\n", tenths / 10, tenths % 10);
+#else
 	sprintf(g_StringPointer, "%s%s%.1fkm\n", "", "", g_PlayerConfigsArray[g_MpPlayerNum].distance / 10.0f);
+#endif
 	return g_StringPointer;
 }
 
@@ -919,13 +924,45 @@ char *mpMenuTextAccuracy(struct menuitem *item)
 	}
 #endif
 
+#ifdef PLATFORM_XBOX
+	u32 tenths = g_PlayerConfigsArray[g_MpPlayerNum].accuracy;
+	sprintf(g_StringPointer, "%u.%u%%", tenths / 10, tenths % 10);
+#else
 	sprintf(g_StringPointer, "%s%s%.1f%%", "", "", g_PlayerConfigsArray[g_MpPlayerNum].accuracy / 10.0f);
+#endif
 	return g_StringPointer;
 }
 
 void mpFormatDamageValue(char *dst, f32 damage)
 {
+#ifdef PLATFORM_XBOX
+	const char *suffix;
+	bool decimal;
 #if VERSION >= VERSION_NTSC_1_0
+	if (damage < 10000.0f) {
+		suffix = "";
+		decimal = damage < 1000.0f;
+	} else if (damage < 1000000.0f) {
+		suffix = "K";
+		decimal = damage < 100000.0f;
+		damage /= 1000.0f;
+	} else {
+		suffix = "M";
+		decimal = damage < 10000000.0f;
+		damage /= 1000000.0f;
+	}
+#else
+	suffix = damage > 100000.0f ? "KL" : "L";
+	if (damage > 100000.0f) damage /= 1000.0f;
+	decimal = true;
+#endif
+	if (decimal) {
+		u32 tenths = (u32)(damage * 10.0f + 0.5f);
+		sprintf(dst, "%u.%u%s", tenths / 10, tenths % 10, suffix);
+	} else {
+		sprintf(dst, "%u%s", (u32)(damage + 0.5f), suffix);
+	}
+#elif VERSION >= VERSION_NTSC_1_0
 	if (damage < 1000) {
 		sprintf(dst, "%s%s%.1f", "", "", damage);
 	} else if (damage < 10000) {
@@ -2513,7 +2550,11 @@ MenuItemHandlerResult menuhandlerMpHandicapPlayer(s32 operation, struct menuitem
 		g_PlayerConfigsArray[item->param].handicap = (u16)data->slider.value;
 		break;
 	case MENUOP_GETSLIDERLABEL:
+#ifdef PLATFORM_XBOX
+		sprintf(data->slider.label, "%u%%\n", (u32)(mpHandicapToDamageScale(g_PlayerConfigsArray[item->param].handicap) * 100.0f + 0.5f));
+#else
 		sprintf(data->slider.label, "%s%s%.00f%%\n", "", "", mpHandicapToDamageScale(g_PlayerConfigsArray[item->param].handicap) * 100);
+#endif
 		break;
 	}
 

@@ -124,12 +124,14 @@ static uint8_t* tex_upload_buffer = nullptr;
 #ifdef PLATFORM_XBOX
 static size_t tex_upload_capacity = 0;
 
-static void reserve_texture_upload(size_t bytes)
+static void reserve_texture_upload(uint32_t source_bytes, uint8_t siz)
 {
     // Conversion scratch does not retain pixels after upload. Grow for the
     // actual texture instead of reserving a maximum-size 4 MiB image at boot.
     const size_t limit = 1024u * 1024u * 4u;
-    if (!bytes || bytes > limit) sysFatalError("Invalid texture conversion size: %u", (unsigned)bytes);
+    if (siz > G_IM_SIZ_32b || !source_bytes || source_bytes > (limit >> (3 - siz)))
+        sysFatalError("Invalid texture conversion: %u bytes, size %u", source_bytes, siz);
+    const size_t bytes = (size_t)source_bytes << (3 - siz);
     if (bytes <= tex_upload_capacity) return;
     size_t capacity = 16384;
     while (capacity < bytes) capacity *= 2;
@@ -1185,8 +1187,7 @@ static void import_texture(int i, int tile, bool importReplacement) {
 #endif
 
 #ifdef PLATFORM_XBOX
-    if (siz > G_IM_SIZ_32b) sysFatalError("Invalid texture conversion format");
-    reserve_texture_upload((size_t)loaded_texture.size_bytes << (3 - siz));
+    reserve_texture_upload(loaded_texture.size_bytes, siz);
 #endif
     if (fmt == G_IM_FMT_RGBA) {
         if (siz == G_IM_SIZ_16b) {
@@ -3109,9 +3110,12 @@ extern "C" void gfx_copy_framebuffer(int fb_dst, int fb_src, int left, int top, 
     const bool is_main_fb = (fb_src == 0);
 
     if (is_main_fb) {
+#ifdef PLATFORM_XBOX
+        // NV2A also needs the Y conversion for EyeSpy's full copy from (0, 0).
         if (left >= 0 && top >= 0) {
-            // Zero is a valid origin too (the EyeSpy copies the whole back
-            // buffer from 0,0). Only negative coordinates request scaling.
+#else
+        if (left > 0 && top > 0) {
+#endif
             // upscale the position
             left = left * gfx_current_dimensions.width / gfx_current_native_viewport.width;
             top = top * gfx_current_dimensions.height / gfx_current_native_viewport.height;

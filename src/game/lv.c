@@ -786,10 +786,17 @@ Gfx *lvRenderManPosIfEnabled(Gfx *gdl)
 		s32 degrees = atan2f(-xfrac, zfrac) * 180.0f / M_PI;
 
 		sprintf(bufroom, "R=%d(%d)", g_Vars.currentplayer->prop->rooms[0], g_Vars.currentplayer->cam_room);
+#ifdef PLATFORM_XBOX
+		sprintf(bufx, "x %4d", (s32)roundf(g_Vars.currentplayer->prop->pos.x));
+		sprintf(bufy, "y %4d", (s32)roundf(g_Vars.currentplayer->prop->pos.y));
+		sprintf(bufz, "z %4d", (s32)roundf(g_Vars.currentplayer->prop->pos.z));
+		if (degrees < 0) degrees += 360;
+#else
 		sprintf(bufx, "%s%sx %4.0f", "", "", g_Vars.currentplayer->prop->pos.x);
 		sprintf(bufy, "%s%sy %4.0f", "", "", g_Vars.currentplayer->prop->pos.y);
 		sprintf(bufz, "%s%sz %4.0f", "", "", g_Vars.currentplayer->prop->pos.z);
-		sprintf(bufdir, "%s %3d", &directions[(degrees + 22) / 45], degrees);
+#endif
+		sprintf(bufdir, "%s %3d", directions[(degrees + 22) / 45], degrees);
 
 		x = viGetViewLeft() + 17;
 		y = viGetViewTop() + 17;
